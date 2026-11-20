@@ -1,9 +1,9 @@
 {
   "source_repo": "D:/Calw OS-project/QuroAI-main-rc5",
-  "apk": "ZorvAI-v1.2.7-DSH-rc5-B20261121-0112.apk",
-  "versionName": "1.2.7",
-  "versionCode": "1002007",
-  "build_stamp": "B20261121-0112",
+  "apk": "ZorvAI-v1.2.8-DSH-rc5-B20261121-0200.apk",
+  "versionName": "1.2.8",
+  "versionCode": "1002008",
+  "build_stamp": "B20261121-0200",
   "split_artifacts": [
     {
       "original_path": "dshmobile/app/src/main/assets/snapshot.tar.xz",
@@ -27,11 +27,11 @@
       "sha256": "91acaa786b8e2fbba56a9fd0f8a1188cee482b5c7baeed707b29ddaa9a294daa"
     },
     {
-      "original_path": "ZorvAI-v1.2.7-DSH-rc5-B20261121-0112.apk",
-      "bytes": 958837789,
+      "original_path": "ZorvAI-v1.2.8-DSH-rc5-B20261121-0200.apk",
+      "bytes": 958839020,
       "parts": 11,
       "chunk_bytes": 94371840,
-      "sha256": "1ad8e01aa760116e47514fbeb3c3298fee0a141acba722ef8179964b0be41a93"
+      "sha256": "b5490adfb25e4aec71dcaaf5b7b2b52d611879a83270aa288058efbb1442a3c7"
     }
   ]
 }

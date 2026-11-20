@@ -1,0 +1,10 @@
+# 分卷还原出来的整包大文件不入 git（单文件 958MB 超过 GitHub 100MB 限制）
+# 交付靠 artifacts/apk/*.partNNN + manifest，restore-artifacts.py 校验还原
+/*.apk
+# 同理，大二进制原始文件本身不入 git，只留分卷
+/source/**/snapshot.tar.xz
+/source/**/dsh-runtime.pack
+/source/**/ubuntu-noble-aarch64-pd-v4.18.0.tar.xz
+# 本地环境/构建缓存
+local.properties
+*.restoring
