@@ -1,0 +1,108 @@
+package com.ai.assistance.quro.core.tools
+import com.ai.assistance.quro.R
+import com.ai.assistance.quro.util.qstr
+
+import android.content.Context
+import com.ai.assistance.quro.core.cards.QuroChatCard
+
+/**
+ * UI 动作工具层：把对话框内部可打开的界面 / 弹层 / 开关暴露给 AI。
+ *
+ * 🔴 合体重构（2026-11-06 用户裁定）：不再把每个界面注册成独立工具
+ * （ui_open_onlyoffice / ui_open_terminal / ui_toggle_deepthink … 37 个散装工具把
+ * 注册表撑到 300+，提示词预算也被工具名淹没）。现在只有一个 **`ui_control`** 工具，
+ * `action` 参数枚举全部动作 —— 打开哪个界面 / 切哪个开关由参数决定，注册表从 37 项收到 1 项。
+ *
+ * 桥与动作名保持不变：[QuroUiActionBridge.dispatch] 收到的仍是 `ui_open_<surface>` 等
+ * 历史动作名（桌面组件 / 卡片 command / 通知入口都按这些名字调用），因此 ChatScreen 的
+ * 分发 when 与所有外部入口零改动 —— 只是把「37 个工具入口」收成「1 个工具 + 参数」。
+ */
+object QuroUiActionBridge {
+    /** 由 ChatScreen 注入：action -> 在 UI 层执行对应打开/切换。未连接时工具返回提示。 */
+    var dispatch: ((action: String) -> Unit)? = null
+
+    /**
+     * 由外部（桌面组件 / 通知 / 快捷方式）请求打开某界面：UI 桥已就绪则立即分发；
+     * 否则暂存为 [pendingAction]，待 ChatScreen 注入 dispatch 时补派——覆盖「Activity 已
+     * 创建但 Compose 尚未组合」的窗口期（桌面组件点击若正好落在窗口期，就不会石沉大海）。
+     */
+    var pendingAction: String? = null
+
+    /** 请求打开某界面（外部入口统一走这里，自动处理就绪/未就绪两种时机）。 */
+    fun request(action: String) {
+        // 🔴 ui_open_connector 直走连接器事件桥（2026-11-06）：连接器页状态在
+        //    QuroUtilityOverlays 内部自管理，不占用 ChatOverlays 的 64KB 方法体预算。
+        if (action == "ui_open_connector") {
+            com.ai.assistance.quro.core.connector.QuroConnectorLauncher.open()
+            return
+        }
+        val d = dispatch
+        if (d != null) d(action) else pendingAction = action
+    }
+
+    /**
+     * 由 ChatScreen 注入：AI 经 ui_widget / ui_card 下发的富组件 -> 挂到当前助手消息气泡。
+     * 工具在运行时调用；未连接时退化为全局 QuroChatCardStore（底部卡片栏）兜底，不丢卡片。
+     */
+    var onCard: ((card: QuroChatCard) -> Unit)? = null
+}
+
+private data class UiActionSpec(
+    val action: String,
+    val label: String,
+    val desc: String,
+)
+
+/** 全部可被 AI 打开/控制的界面、弹层与开关（对话框内 UI 组件 → ui_control 的 action 枚举）。 */
+private val UI_ACTIONS = listOf(
+    UiActionSpec("ui_open_onlyoffice", "文档查看器", "打开应用内文档查看器（本地渲染引擎，支持 Word/Excel/PPT/PDF/文本预览与编辑，无需联网、不依赖第三方）"),
+    UiActionSpec("ui_open_knowledge", qstr(R.string.qk_00215), "打开知识库，浏览/导入/检索本地知识文档"),
+    UiActionSpec("ui_open_terminal", qstr(R.string.qk_00216), "打开应用内终端 shell"),
+    UiActionSpec("ui_open_editor", qstr(R.string.qk_00886), "打开内置代码编辑器"),
+    UiActionSpec("ui_open_toolbox", qstr(R.string.qk_00214), "打开工具箱（文件管理/浏览器/IDE）"),
+    UiActionSpec("ui_open_kaleidobox", qstr(R.string.qk_02777), "打开 KaleidoBox 工具包运行器：以进程内 JVM/Dex 引擎运行 Kotlin/Java 工具包，列出已装包、装载内置示例计数器并渲染可交互 UI 表面（列包/装包/调 unit/渲染 UI）"),
+    UiActionSpec("ui_open_build", qstr(R.string.qk_02791), "打开 Zorv 构建台（端侧 APK 构建器：Java 工程 → DEX → APK，自带 ecj/d8/apksig 工具链，免 aapt2，可离线编译打包安卓安装包）"),
+    UiActionSpec("ui_open_desktop", "桌面模式", "打开 ZorvAI 桌面模式：全屏任务栏桌面，把已安装应用铺成桌面图标，点图标即在后台虚拟屏里打开（不打扰当前前台）。适合「像电脑一样用这台手机」的场景"),
+    UiActionSpec("ui_open_plugins", qstr(R.string.qk_02779), "打开插件管理"),
+    UiActionSpec("ui_open_skills", qstr(R.string.qk_00218), "打开技能 SKILL 管理（查看/新增/编辑/启用用户自定义技能）"),
+    UiActionSpec("ui_open_cms", "能力模块(CMS)", "打开 CMS 能力模块"),
+    UiActionSpec("ui_open_connector", "连接器", "打开连接器页：浏览并连接官方 MCP 服务（Notion/GitHub/高德地图等），授权后 AI 可直接调用该服务的真实工具"),
+    UiActionSpec("ui_open_aci", qstr(R.string.qk_03843), "打开 ACI 管理中心：浏览已发现的第三方 App、查看绑定状态与能力清单、手动注册 / 刷新 / 重绑"),
+    UiActionSpec("ui_open_permission", "权限中心", "打开 CapOS 权限中心（L1-L4）"),
+    UiActionSpec("ui_open_model_config", qstr(R.string.qk_02103), "打开模型配置"),
+    UiActionSpec("ui_open_voice", qstr(R.string.qk_03057), "打开语音服务设置（TTS/STT）"),
+    UiActionSpec("ui_open_tts", "文本转语音", "打开 TTS 设置"),
+    UiActionSpec("ui_open_stt", "语音转文本", "打开 STT 设置"),
+    UiActionSpec("ui_open_voice_service", "语音服务(高级)", "打开语音服务高级设置"),
+    UiActionSpec("ui_open_about", qstr(R.string.qk_03830), "打开关于页"),
+    UiActionSpec("ui_open_appearance", "外观", "打开外观设置"),
+    UiActionSpec("ui_open_soul", qstr(R.string.qk_02449), "打开人格/灵魂注入设置"),
+    UiActionSpec("ui_open_memory", "记忆管理", "打开记忆管理对话框"),
+    UiActionSpec("ui_open_sheet_model", "模型选择弹层", "打开底部模型选择弹层"),
+    UiActionSpec("ui_open_sheet_persona", "人格选择弹层", "打开底部人格选择弹层"),
+    UiActionSpec("ui_open_sheet_settings", "设置弹层", "打开底部设置弹层"),
+    UiActionSpec("ui_open_sheet_upload", "工具面板", "打开 +工具 上传/工具面板"),
+    UiActionSpec("ui_open_sheet_voice", "语音面板", "打开语音面板（TTS/STT）"),
+    UiActionSpec("ui_open_upload", qstr(R.string.qk_00161), "打开文件上传选择（图片/文件/视频）"),
+    UiActionSpec("ui_open_import_tool", "导入工具", "打开导入工具对话框（AI 自写/粘贴 JSON）"),
+    UiActionSpec("ui_open_ai_search", "AI 搜索", "打开 AI 浏览器·联网搜索对话框"),
+    UiActionSpec("ui_open_doc_generate", qstr(R.string.qk_02713), "打开文档生成对话框（生成 WPS/Office）"),
+    // Web UI 后台服务：开启 / 显示当前地址。
+    UiActionSpec("ui_open_webui", "Web UI 后台服务", "打开 Web UI 对话框：开启 ZorvAI 的 Web 前台服务（若未运行），显示局域网访问地址、扫码/复制链接。Web UI 是另一个 ZorvAI 对话框，功能与界面与主对话框一致。"),
+    UiActionSpec("ui_toggle_deepthink", "切换深度思考", "切换对话框「深度思考」开关（更慢但更深）"),
+    UiActionSpec("ui_toggle_memory", "切换自动记忆", "切换「AI 自动保存记忆」开关"),
+    UiActionSpec("ui_clear_chat", "清空对话", "清空当前对话消息"),
+    UiActionSpec("ui_new_chat", qstr(R.string.qk_00282), "新建一个对话"),
+)
+
+/**
+ * 🔴 合体终局（2026-11-06）：唯一的 `ui_control` 工具在 [QuroUiControlTool]
+ * （QuroUiTools.kt，走 UiNavigationBus，ChatScreen 已订阅）。本文件不再注册任何工具 ——
+ * 旧的 37 个 ui_open_*、ui_toggle_*、ui_clear_chat、ui_new_chat 全部退役；
+ * UI_ACTIONS 保留为**动作目录**（供 QuroUiControlTool 的兼容直通与描述全集引用）。
+ * 桥 [QuroUiActionBridge] 保持不变：桌面组件 / 卡片 command / 通知入口仍按历史动作名调用。
+ */
+val allUiActionTools: List<QuroTool> = emptyList()
+
+/** UI 动作工具名集合（coreSpecs 默认下发集引用 —— ui_control 由 QuroUiTools 注册）。 */
+fun uiActionToolNames(): Set<String> = setOf("ui_control")

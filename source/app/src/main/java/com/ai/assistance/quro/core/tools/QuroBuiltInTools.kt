@@ -1,0 +1,663 @@
+package com.ai.assistance.quro.core.tools
+
+import android.content.Context
+import android.os.Build
+import com.ai.assistance.quro.core.model.QuroModelConfigRepository
+import com.ai.assistance.quro.core.knowledge.QuroRagKnowledgeTool
+import com.ai.assistance.quro.core.cms.QuroCmsCallTool
+import com.ai.assistance.quro.core.cms.QuroCmsDeployTool
+import com.ai.assistance.quro.core.cms.QuroCmsListTool
+import com.ai.assistance.quro.core.cms.QuroCmsLogsTool
+import com.ai.assistance.quro.core.cms.QuroCmsResultTool
+import com.ai.assistance.quro.core.cms.QuroCmsRunDagTool
+import com.ai.assistance.quro.core.cms.QuroCmsStatusTool
+import com.ai.assistance.quro.core.cms.QuroCmsEngineStatusTool
+import com.ai.assistance.quro.core.cms.QuroCmsUndeployTool
+import com.ai.assistance.quro.core.cms.QuroCmsToolboxTool
+import com.ai.assistance.quro.core.cms.QuroPrivStatusTool
+import com.ai.assistance.quro.core.tools.QuroDevEnvTool
+import com.ai.assistance.quro.core.tools.QuroKaleidoBoxTool
+import com.ai.assistance.quro.core.aidlaci.QuroAidlAciCallTool
+import com.ai.assistance.quro.core.aidlaci.QuroAidlAciListTool
+import com.ai.assistance.quro.core.aidlaci.QuroAciHttpServerTool
+import com.ai.assistance.quro.core.mcp.McpAciListTool
+import com.ai.assistance.quro.core.mcp.McpAciCallTool
+import com.ai.assistance.quro.core.mcp.McpAciBridgeTool
+import com.ai.assistance.quro.core.tools.ReadScreenTool
+import com.ai.assistance.quro.core.tools.GetForegroundAppTool
+import com.ai.assistance.quro.core.tools.GetScreenStateTool
+import com.ai.assistance.quro.core.tools.TapScreenTool
+import com.ai.assistance.quro.core.tools.LongPressScreenTool
+import com.ai.assistance.quro.core.tools.SwipeScreenTool
+import com.ai.assistance.quro.core.tools.InputTextTool
+import com.ai.assistance.quro.core.tools.ScrollScreenTool
+import com.ai.assistance.quro.core.tools.GlobalActionTool
+import com.ai.assistance.quro.core.tools.ScreenshotTool
+import com.ai.assistance.quro.core.tools.ScreenshotBase64Tool
+import com.ai.assistance.quro.core.tools.VisualAnalysisTool
+import com.ai.assistance.quro.core.tools.TakePhotoTool
+import com.ai.assistance.quro.core.tools.TranslateTool
+import com.ai.assistance.quro.core.tools.ScreenRecordTool
+import com.ai.assistance.quro.core.tools.VolumeControlTool
+import com.ai.assistance.quro.core.tools.BrightnessControlTool
+import com.ai.assistance.quro.core.tools.WiFiControlTool
+import com.ai.assistance.quro.core.tools.BluetoothControlTool
+import com.ai.assistance.quro.core.tools.NotificationControlTool
+import com.ai.assistance.quro.core.tools.AirplaneModeTool
+import com.ai.assistance.quro.core.tools.ScreenRotationTool
+import com.ai.assistance.quro.core.tools.OpenAppTool
+import com.ai.assistance.quro.core.tools.ShizukuExecTool
+import com.ai.assistance.quro.core.tools.ShizukuRootExecTool
+import com.ai.assistance.quro.core.tools.FreezeAppTool
+import com.ai.assistance.quro.core.tools.InstallAppTool
+import com.ai.assistance.quro.core.tools.ShizukuStatusTool
+import com.ai.assistance.quro.core.tools.LockScreenTool
+import com.ai.assistance.quro.core.tools.DeviceAdminStatusTool
+import com.ai.assistance.quro.core.tools.SetCameraDisabledTool
+import com.ai.assistance.quro.core.tools.RootExecTool
+import com.ai.assistance.quro.core.tools.RootStatusTool
+import com.ai.assistance.quro.tools.VncTool
+import com.ai.assistance.quro.tools.MiniAppAliasTool
+import com.ai.assistance.quro.core.tools.LinuxRunTool
+import com.ai.assistance.quro.core.tools.LinuxInstallTool
+import com.ai.assistance.quro.core.tools.LinuxStartTool
+import com.ai.assistance.quro.core.tools.LinuxStopTool
+import com.ai.assistance.quro.core.tools.LinuxStatusTool
+import com.ai.assistance.quro.core.tools.AiwpsCreateTool
+import com.ai.assistance.quro.core.tools.AiwpsReadTool
+import com.ai.assistance.quro.core.tools.AiwpsEditTool
+import com.ai.assistance.quro.core.tools.QuroExperienceLogTool
+import com.ai.assistance.quro.core.tools.QuroExperienceQueryTool
+import com.ai.assistance.quro.core.tools.QuroExperienceCorrectTool
+import com.ai.assistance.quro.core.tools.QuroExperienceVersionCheckTool
+import com.ai.assistance.quro.core.tools.FluidCloudTool
+import com.ai.assistance.quro.core.websearch.WebSearchTool
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * Quro 内置工具：演示工具调用能力。
+ */
+
+/** 返回当前时间。 */
+class QuroClockTool : QuroTool {
+    override val name = "get_current_time"
+    override val readOnly = true
+    override val description = "获取当前日期与时间，参数为空 {}。"
+    override val parametersJson = """{"type":"object","properties":{}}"""
+    override fun run(context: Context, arguments: String): String {
+        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        return fmt.format(Date())
+    }
+}
+
+/** 返回设备基础信息。 */
+class QuroDeviceInfoTool : QuroTool {
+    override val name = "get_device_info"
+    override val readOnly = true
+    override val description = "获取设备型号与系统版本，参数为空 {}。"
+    override val parametersJson = """{"type":"object","properties":{}}"""
+    override fun run(context: Context, arguments: String): String =
+        "型号=${Build.MODEL}, 品牌=${Build.BRAND}, Android=${Build.VERSION.RELEASE}, SDK=${Build.VERSION.SDK_INT}"
+}
+
+/** 四则运算计算器（安全递归下降求值，不支持函数/变量）。 */
+class QuroCalculatorTool : QuroTool {
+    override val name = "calculate"
+    override val readOnly = true
+    override val description = "计算一个算术表达式，支持 + - * / 和括号，参数为 {\"expr\":\"1+2*3\"}。"
+    override val parametersJson = """{
+        "type":"object",
+        "properties":{"expr":{"type":"string","description":"算术表达式"}},
+        "required":["expr"]
+    }"""
+
+    override fun run(context: Context, arguments: String): String {
+        val expr = JSONObject(arguments).optString("expr", "").trim()
+        if (expr.isEmpty()) return "缺少 expr 参数"
+        return try {
+            val v = QuroMath.eval(expr)
+            if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
+        } catch (e: Exception) {
+            "计算失败: ${e.message}"
+        }
+    }
+}
+
+/** 极简算术求值器。 */
+object QuroMath {
+    fun eval(src: String): Double {
+        val s = src.replace(" ", "")
+        if (s.isEmpty()) throw IllegalArgumentException("空表达式")
+        val p = Parser(s)
+        val v = p.parseAddSub()
+        if (p.pos != s.length) throw IllegalArgumentException("非法字符: ${s[p.pos]}")
+        return v
+    }
+
+    private class Parser(private val s: String) {
+        var pos = 0
+        private fun peek(): Char? = if (pos < s.length) s[pos] else null
+        private fun eat(c: Char) {
+            if (peek() == c) pos++ else throw IllegalArgumentException("期望 '$c'")
+        }
+
+        fun parseAddSub(): Double {
+            var v = parseMulDiv()
+            while (peek() == '+' || peek() == '-') {
+                val op = s[pos++]
+                val r = parseMulDiv()
+                v = if (op == '+') v + r else v - r
+            }
+            return v
+        }
+
+        private fun parseMulDiv(): Double {
+            var v = parsePrimary()
+            while (peek() == '*' || peek() == '/') {
+                val op = s[pos++]
+                val r = parsePrimary()
+                v = if (op == '*') v * r else v / r
+            }
+            return v
+        }
+
+        private fun parsePrimary(): Double {
+            if (peek() == '(') {
+                eat('(')
+                val v = parseAddSub()
+                eat(')')
+                return v
+            }
+            val start = pos
+            while (pos < s.length && (s[pos].isDigit() || s[pos] == '.')) pos++
+            if (start == pos) throw IllegalArgumentException("期望数字")
+            return s.substring(start, pos).toDouble()
+        }
+    }
+}
+
+/** 注册全部原创工具（最大集，100% 自研，引擎来自 vendored droid-mcp Apache-2.0）。 */
+fun buildQuroRegistry(context: Context? = null): QuroToolRegistry {
+    val r = QuroToolRegistry()
+    //    全文由模型按需调本工具加载进当轮 —— 「skills 开关没用」的根治配套。
+    //    personaId 由调用方（主聊天 VM / bot 引擎）按需创建带绑定的实例覆盖，此处空=全局兜底。
+    r.register(SkillLoadTool())
+    r.register(PetControlTool())
+    //    配合系统提示词「人格目录」段，AI 可向本机其它人格卡提问（同步单轮）。
+    r.register(AskPersonaTool())
+    // ══════════════ 工具分类架构（能力域 → 代表工具）══════════════
+    //  · 基础/系统/设备   : clock, device_info, battery, wifi, sensors, clipboard, apps, notifications, bluetooth, flashlight
+    //  · 通信/日历        : sms, contacts, calendar
+    //  · 文件/工作区      : list/read/write/delete files, workbench, workspace_*, knowledge_*
+    //  · 网络/Web         : http_request, open_web, ai_browser, web_crawler
+    //  · 联网检索(端侧)    : web_search, read_url（自研多引擎并发+查询改写+正文密度抽取+五信号重排+上下文打包；纯结构化文本，非浏览器套壳）
+    //  · 屏幕捕获授权      : enable_screen_capture（AI 主动发起 MediaProjection 系统授权，无需手动长按开关）
+    //  · 终端/沙箱/Linux  : quro_term, terminal_*, sandbox, linux_*, python_run
+    //  · 特权/ADB/LSPosed : priv_exec, priv_status, adb_term, lsposed（高风险，自动降级通道）
+    //  · 抓包             : packet_capture（proot 内 mitmdump，flow 写 /mnt/quro/mitm/）
+    //  · 内置浏览器 AI 操控: browser_act（snapshot/click/fill/eval/wait/read，接管对话框内置 WebView）
+    //  · 对话框文档/排版   : chat_doc（对话框内渲染 Markdown/HTML/代码）；文档附件支持对话框内联排版预览（mammoth/SheetJS/pdf.js）
+    //  · ACI/跨应用       : aidl_aci_*, aci_http_server, mcp_aci_*, list/invoke_app_function
+    //  · 无障碍控屏/L1     : read_screen, tap/longpress/swipe, ai_keyboard_*, screenshot*, visual_*
+    //  · 系统控制/L2-L5    : shizuku_*, root_*, device_admin_*, 媒体/拍摄/录屏/音量/亮度…
+    //  · 多媒/生成         : image_gen, video_gen, translate, image/audio/video_recognition
+    //  · 文档生成          : aiwps_create/read/edit, enhanced_doc
+    //  · 记忆/经验/技能    : memory_*, experience_*, skills, tool_discovery
+    //  · 动态 UI(必备)      : quro-ui 原生组件 = ui_dsl_spec / ui_validate / 消息内 ```quro-ui 围栏（AI 主动默认输出）
+    //  · UI/可视化         : ui_control(ui_*), visual_*, creative_studio, fluid_cloud, node_editor(节点编辑器/可视化编程), visual_studio(可视化编程工作台)
+    //  · 构建台/APK 构建    : ui_open_build（打开构建台）, build_apk（端侧 Java→DEX→APK 离线打包）
+    //  · 化小窗(纯 UI)     : 对话框顶栏 + 浏览器工具栏「化小窗」按钮（可拖拽悬浮小窗，非工具）
+    // ══════════════════════════════════════════════════════════════
+
+    // 基础演示工具
+    r.register(QuroClockTool())
+    r.register(QuroDeviceInfoTool())
+    r.register(QuroCalculatorTool())
+    // 系统 / 设备
+    r.register(GetBatteryTool())
+    r.register(GetWifiTool())
+    r.register(GetNetworkTool())
+    r.register(GetSensorsTool())
+    r.register(VibrateTool())
+    // 🔴 合体（2026-11-06）：clipboard(get|set) 吸收 get_clipboard/set_clipboard
+    r.register(ClipboardTool())
+    // ── 16 族工具合体批（详见 QuroMergedTools.kt）：46 个散装入口 → 17 个 ──
+    r.register(FileReadMergedTool())       // file_read   ← read_text_file/file_read/workspace_read
+    r.register(ListDirMergedTool())        // list_dir    ← list_files/browse_files/workspace_list/find_files
+    r.register(FileWriteMergedTool())      // file_write  ← write_file/workspace_write
+    r.register(AlarmClockMergedTool())     // alarm_clock ← set_alarm/cancel_alarm/list_alarms/set_timer
+    r.register(TaskScheduleMergedTool())   // task_schedule ← schedule_task/list/delete_scheduled_task
+    r.register(DeviceControlMergedTool())  // device_control ← 8 个设置开关工具
+    r.register(SpeakMergedTool())          // speak       ← speak/stop_speak
+    r.register(VisualPopupMergedTool())    // visual_popup ← visual_popup/visual_question/visual_action
+
+    r.register(ListAppsTool())
+    r.register(LaunchAppTool())
+    // 🔴 合体：open_app(自标弃用)/search_and_launch_app(模糊搜索是 launch_app 的子集) 退役
+
+    r.register(GetPackageNameTool())
+    r.register(GetNotificationsTool())
+    r.register(GetBluetoothTool())
+    r.register(ToggleFlashlightTool())
+    // 相机能力补充（能力查询/录像；拍照 take_photo 已有实现，见下方 QuroScreenshotTools）
+    r.register(GetCameraCapabilitiesTool())
+    r.register(CaptureVideoTool())
+    // 通信
+    r.register(ReadSmsTool())
+    r.register(SendSmsTool())
+    r.register(ReadContactsTool())
+    // 日历
+    r.register(ReadCalendarTool())
+    r.register(WriteCalendarTool())
+    // 文件（应用专属目录，无权限）
+    // 🔴 合体（2026-11-06）：file_read/list_dir 吸收 read_text_file/list_files/browse_files/workspace_read/list/find_files
+
+    // 位置
+    r.register(GetLocationTool())
+    r.register(GeocodeTool())
+    // 媒体
+    r.register(ListMediaTool())
+    // AI 发文件：把设备文件作为对话框附件（图片/视频/文档直接预览）
+    r.register(AttachFileTool())
+    // 闹钟（应用内真正会响的提醒）
+    // 🔴 合体（2026-11-06）：alarm_clock 吸收 set_alarm/cancel_alarm/list_alarms/set_timer
+
+    // 定时任务/自动化提醒
+    // 🔴 合体（2026-11-06）：task_schedule 吸收 schedule_task/list_scheduled_tasks/delete_scheduled_task
+
+    r.register(ListScheduledTasksTool())
+    r.register(DeleteScheduledTaskTool())
+    // 网络 / Web
+    r.register(HttpRequestTool())
+    // ═══ 联网检索（自研端侧：多引擎并发 + 查询改写 + 正文密度抽取 + 五信号重排 + 上下文打包）═══
+    // 与"浏览器套壳"无关：全程只有结构化文本流动，不渲染页面。AI 自主决定是否联网、读哪几条。
+    r.register(WebSearchTool("web_search"))
+    r.register(WebSearchTool("read_url"))
+    // ═══ 屏幕捕获授权（AI 主动发起 MediaProjection 系统授权，无需手动长按开关）═══
+    r.register(EnableScreenCaptureTool())
+    // 文件写改删
+    // 🔴 合体（2026-11-06）：file_write 吸收 write_file/workspace_write
+
+    r.register(DeleteFileTool())
+    r.register(MakeDirectoryTool())
+    r.register(MoveFileTool())
+    r.register(CopyFileTool())
+
+    r.register(FileInfoTool())
+    // 工具箱：文件管理 / 浏览器 / IDE
+
+    // 格式转换（对应「其他 AI」扩展生态里点名的 file_converter 能力：csv↔json、markdown→html、json 美化）
+    r.register(QuroFileConverterTool())
+    // 文件编辑增强（对应「其他 AI」文件与编辑维的 writer / ApkEditor / ExeEditor）
+    r.register(QuroWriterTool())
+    r.register(QuroApkEditorTool())
+    r.register(QuroExeEditorTool())
+    // 记忆系统工程化（对应「其他 AI」记忆维的 MemorySpace / Rebuild / AutoSaveCandidate / WindowPlanner / ExportModel）
+    r.register(QuroMemorySpaceTool())
+    r.register(QuroMemoryRebuildTool())
+    r.register(QuroMemoryAutoSaveTool())
+    r.register(QuroMemoryWindowPlanTool())
+    r.register(QuroMemoryExportTool())
+
+    r.register(OpenWebTool())
+    r.register(RunCodeTool())
+    // 宿主技能库管理：AI 只可列举技能。用哪个技能由用户在对话框选择后随消息发送，
+    // 不再注册「启用/禁用」——那只是本地布尔值，AI 根本感知不到，是错误的作用方式。
+    r.register(SkillListTool())
+    // SandboxPackage 完整脚本运行时：code_runner（JS/TS + Tools.* 宿主 API + CommonJS）+ ToolPkg 脚本包 + 项目模板
+    r.register(CodeRunnerTool())
+    r.register(ToolPkgListTool())
+    r.register(ToolPkgCallTool())
+    r.register(ProjectCreateTool())
+    // ═══ 构建台：端侧 APK 构建（Java → DEX → APK，AI 可真正触发编译打包）═══
+    r.register(BuildApkTool())
+    r.register(ExportApkTool())    // 让 AI 也能「导出产物」（构建台 UI 的导出是文件选择器、AI 调不起）
+    // Web 应用：多文件多语言 Web 应用工程（WebView + native.* 原生桥）。
+    // 🔴 合体（2026-11-06）：workbench 纯别名壳退役 —— 错误提示 removedToolNotes 指回 miniapp。
+
+    // Web 应用：AI 直接 CRUD/运行 Web 应用工程（HTML + Page() 运行时 + native.* 原生桥）。
+    // 产物经 ```miniapp 围栏回到对话框气泡渲染；工具箱「Web 应用」面板与它共享同一份工程文件。
+    r.register(MiniAppTool())
+    // 原生小程序引擎（miniapp-sdk / com.yuanbao.miniapp，移植自 Quor-a/GenUI）：自研 C++ JS 引擎 + WXML/WXSS
+    // 原生渲染。与上面的 WebView「Web 应用」并列两套引擎；本工具让 AI 生成/治理 WXML 工程，
+    // 渲染由工具中心「小程序（原生引擎）」面板的 MiniAppView 完成。
+    r.register(MiniAppSdkTool())
+    // 内置的完整 GenUI-Agent（独立应用，GenUI JSON DSL → 原生 Compose 组件，530+ 组件）。
+    // 与上面的 miniapp 是**不同范式**的两套东西：miniapp 走 HTML/WXML 引擎，本工具走原生 Compose。
+    r.register(GenUiAgentOpenTool())
+    // TTS 朗读
+    // 🔴 2026-11-07 修复重复注册：上方「16 族合体批」已注册 SpeakMergedTool(name=speak，
+    //    支持 action=stop)。此处再注册旧 SpeakTool，registry 的 map[name]=tool 会静默覆盖
+    //    合体版，导致 speak(action=stop) 永远走旧实现并忽略 action。删除，保留合体版。
+    // 🔴 合体（2026-11-06）：speak(action=stop) 吸收 stop_speak
+
+    // Intent / 广播
+    r.register(ExecuteIntentTool())
+    r.register(SendBroadcastTool())
+    // CMS v2 能力模块系统：让 AI 自我感知并真实调用已安装的能力
+    r.register(QuroCmsListTool())
+    r.register(QuroCmsCallTool())
+    // CMS v2 终端部署/卸载（原创运行时）：把模块推到 proot 终端并运行
+    r.register(QuroCmsDeployTool())
+    r.register(QuroCmsUndeployTool())
+    // CMS v2 统一工具箱：整合模块管理、引擎管理、开发环境管理、部署修复于一体
+    r.register(QuroCmsToolboxTool())
+    // 开发环境管理工具：独立管理终端开发环境的安装/卸载/检查
+    r.register(QuroDevEnvTool())
+    // ACI（Agent Capability Interface）：让 AI 作为控制方发现并调用第三方 App 暴露的能力
+    r.register(QuroAidlAciListTool())
+    r.register(QuroAidlAciCallTool())
+    // ACI HTTP 模拟服务器（当真实 API 尚未完成时使用）
+    r.register(QuroAciHttpServerTool())
+    // 工作区 AI 工具：AI 直接读写 ZorvAI 自己的 QuroWorkspace（与构建台 ACI 协作）
+
+    // 下面 4 个是 workspace 统一入口的内部实现：applyUnifiedTools() 会把它们降级到 legacy，
+    // 模型只看到 workspace，历史会话按旧名发起的调用仍能真实执行。
+    r.register(WorkspaceRenderTool())   // 工作区文件渲染到对话框
+    r.register(WorkspaceDocTool())      // 工作区文档创建
+    r.register(WorkspaceMediaTool())    // 工作区媒体播放（音乐/视频）
+    r.register(WorkspaceDocViewTool())  // 工作区文档查看（系统应用打开）
+    // VNC 桌面环境工具
+    r.register(VncTool())
+    // 特权通道状态查询：AI 调用高风险能力前自查可用通道、自行选择
+    r.register(QuroPrivStatusTool())
+    // CMS v2 反馈环：状态/日志/结构化结果查询（让 AI 自我确认「部署/调用是否成功」）
+    r.register(QuroCmsStatusTool())
+    r.register(QuroCmsEngineStatusTool())
+    r.register(QuroCmsLogsTool())
+    r.register(QuroCmsResultTool())
+    // CMS v2 DAG 编排：按依赖执行一组 terminal 命令
+    r.register(QuroCmsRunDagTool())
+    // QuroTerm 自研沙盒终端能力（集成 NovaTerm为 QuroTerm）
+    r.register(QuroTermTool())
+    // #564 终端直用特权通道执行（Shizuku→ROOT 自动降级）：run=以 root 执行命令 / status=查特权通道
+    r.register(QuroPrivExecTool())
+    // #565 ADB 可当 ADB 终端（无线调试中枢）：shell=本机 ADB shell / tcp_status|tcp_enable|tcp_disable=管理 TCP adbd
+    r.register(QuroAdbTermTool())
+    // ADB 主机侧：本机当 ADB client 去调试**另一台**设备（USB 直连 / TCP / 回环），
+    // 支持 shell / push / pull / install。与 adb_term 的分工：adb_term 是「本机被调试」，本工具是「去调试别人」。
+    r.register(AdbDevTool())
+    // LSPosed 现代模块（API 102）AI 直驱：查框架通信/真实作用域/已加载模块进程，读写 RemotePreferences 能力开关
+    r.register(QuroLsposeTool())
+    // 记忆库：AI 自动沉淀长期记忆（保存/列出/检索/删除）
+    r.register(QuroMemorySaveTool())
+    r.register(QuroMemoryListTool())
+    r.register(QuroMemorySearchTool())
+    r.register(QuroMemoryDeleteTool())
+    // AI 经验笔记 & 自我进化系统（App 本地沙盒，零隐私风险）
+    r.register(QuroExperienceLogTool())
+    r.register(QuroExperienceQueryTool())
+    r.register(QuroExperienceCorrectTool())
+    r.register(QuroExperienceVersionCheckTool())
+    // ═════════════ L1 无障碍控屏（CapOS 通道，需无障碍服务已授权）══════════════
+    // 屏幕感知：读取界面 / 前台应用 / 屏幕状态
+    r.register(ReadScreenTool())
+    r.register(GetForegroundAppTool())
+    r.register(GetScreenStateTool())
+    // 屏幕操控：点击 / 长按 / 滑动 / 输入文本 / 滚动 / 全局动作
+    r.register(TapScreenTool())
+    r.register(LongPressScreenTool())
+    r.register(SwipeScreenTool())
+    r.register(InputTextTool())
+    // AI 智能体键盘（Agent IME）：ai_type_text / ai_press_enter / ai_press_send，走 IME 通道把文本打入聚焦输入框
+    r.register(AiKeyboardTypeTool())
+    r.register(AiKeyboardPressEnterTool())
+    r.register(AiKeyboardSendTool())
+    r.register(ScrollScreenTool())
+    r.register(GlobalActionTool())
+    // ═════════════ 后台虚拟屏（移植 Mika：Shizuku 建独立虚拟屏，不打扰用户主屏）══════════════
+    // 与上面 L1 无障碍控屏的分工：L1 操作「用户正在看的屏」，本工具操作「用户看不见的屏」。
+    // 截图经 Surface→ImageReader，不依赖无障碍；主屏焦点与输入法不受影响。
+    r.register(BackgroundScreenTool())
+    // ═════════════ 屏幕视觉双模感知（截图+视觉分析）══════════════
+    r.register(ScreenshotTool())           // 截图并保存文件
+    // 🔴 合体（2026-11-06）：screenshot(return_format=base64) 吸收 screenshot_base64
+    r.register(VisualAnalysisTool())       // 截图+视觉模型分析
+    // ═════════════ 系统级控制动作（一等公民）══════════════
+    r.register(TakePhotoTool())            // 拍照
+    r.register(ScreenRecordTool())         // 录屏
+    // 🔴 合体（2026-11-06）：device_control 吸收 8 个设置开关工具；SetTimerTool 并入 alarm_clock；OpenAppTool 退役
+    // 文件知识库（Path ②）：本地文档检索 + 写入，零基建覆盖日常知识检索
+    // 🔴 合体（2026-11-06）：knowledge_manage(action=search|add) 吸收 knowledge_search/knowledge_add
+
+    // 第三方服务授权保险库：供 http_request 用 service 参数自动带鉴权与 baseUrl
+    r.register(AuthServiceAddTool())
+    r.register(AuthServiceListTool())
+    r.register(AuthServiceRemoveTool())
+    r.register(QuroGitHubSearchTool())   // github_search：对话框内把 GitHub 当作搜索引擎使用
+    // ═══ 七维能力补全（Dim1/2/3/4/7）：扩展生态 / 五语言真执行 / UI 自动化 / FFmpeg 链 / 终端增强 ═══
+    // Dim1 扩展生态（网络类 + 编排）：对应「其他 AI」JS 工具包量级差距，补齐可调用联网能力
+    r.register(QuroCrossrefTool())            // crossref_search：Crossref 学术文献检索（免费）
+    // 🔴 合体（2026-11-06）：web_search(engine=…) 吸收 search_provider（内部转发）
+
+    r.register(QuroImgGenProviderTool())     // img_gen_provider：多厂商文生图（openai/qwen/minimax/siliconflow/xai/nanobanana/zhipu）
+    r.register(QuroTrain12306Tool())         // train_12306：12306 余票查询
+    r.register(QuroGithubReadTool())         // github_read：读仓库文件/Issue/PR diff
+    // Dim1 编排：多步工作流 + 脚本化 UI 自动操作（链式调用其它已注册工具）
+    r.register(QuroWorkflowTool())           // workflow_run：多步编排/条件/循环
+    r.register(QuroAutomaticUiTool())        // automatic_ui：脚本化 UI 动作序列
+    // Dim2 五语言真执行：javascript/python/ruby/go/rust（proot 内真跑）
+    r.register(QuroPolyglotRunner())         // polyglot_run
+    // Dim3 UI 自动化：UI 控件树获取 + 精准点击（虚拟显示器 display 参数）
+    r.register(QuroUiTreeTool())             // ui_tree
+    // Dim4 媒体：完整 FFmpeg 链（探测/转码/裁剪/合并）
+    r.register(QuroFfmpegTool())             // ffmpeg
+    // Dim7 终端增强：tmux 会话管理 + 自定义按键绑定（对应「其他 AI」多 tmux/自定义按键）
+    r.register(QuroTmuxTool())               // tmux
+    r.register(QuroKeybindingTool())         // terminal_keys
+    // Dim5 文件与编辑补全：Git 集成 + 语法检查（对应「其他 AI」文件与编辑维的 Git/语法检查短板）
+    r.register(QuroGitTool())                // git：proot 内真实 git（status/log/diff/branch/remote/add/commit/clone/pull/push）
+    r.register(QuroSyntaxCheckTool())        // syntax_check：端侧+proot 多语言语法校验（json/xml/yaml/python/js/ruby/go/rust/kotlin）
+    // 终端驱动工具（统一为单一 terminal 工具，action 分发；内部复用原 10 个终端子工具实例）
+    r.register(QuroTerminalTool())
+    // Tasker 双向集成（#39）：ZorvAI 可被 Tasker 触发、也能向 Tasker 派发动作
+    r.register(QuroTaskerTool())           // tasker：fire 点燃任务 / broadcast 发广播 / state 查安装
+
+    // ═════════════ L2 Shizuku 执行（CapOS 通道，需 Shizuku 已授权+运行中）══════════════
+    r.register(ShizukuExecTool())
+    r.register(ShizukuRootExecTool())
+    r.register(FreezeAppTool())
+    r.register(InstallAppTool())
+    r.register(ShizukuStatusTool())
+
+    // ═════════════ L3 设备管理员（CapOS 通道，需设备管理员已激活）══════════════
+    r.register(LockScreenTool())
+    r.register(DeviceAdminStatusTool())
+    r.register(SetCameraDisabledTool())
+
+    // ═════════════ L4 ROOT（CapOS 最高风险通道，需设备已 Root）══════════════
+    r.register(RootExecTool())
+    r.register(RootStatusTool())
+    // L5 应用内 Linux 环境（proot + Ubuntu 24.04，可选高级入口，完整工具集解锁）
+    r.register(LinuxRunTool())
+    r.register(LinuxInstallTool())
+    r.register(LinuxStartTool())
+    r.register(LinuxStopTool())
+    r.register(LinuxStatusTool())
+    r.register(LinuxPackageTool())   // 统一包管理：自动适配 apt/apk/dnf/pacman
+    r.register(LinuxProcessTool())   // 查看/终止 Linux 环境残留后台进程（issue #11 问题 9 入口）
+    // Termux（完整移植的官方宿主）：AI 直接在这套发行版里执行命令/装包/查状态/拉起界面。
+    // 与 terminal 的分工：terminal 管交互式会话，termux 管「在 Termux 发行版里干活」。
+    r.register(TermuxTool())
+    // ═════════════ 墨语言（Mo）独立运行时 ═════════════
+    // 工具链是 x86_64 静态可执行、qemu 是 aarch64 静态，两者零依赖 → 直接在 App 私有目录进程调用，
+    // **不依赖 Ubuntu/proot**。用于编译/运行 .mo、读写源码修 bug、调 mols/modb 等工具链。
+    r.register(MoyuTool())
+    r.register(ZorvaiCapabilitiesTool())   // 能力门：harness 侧先问「我能用什么」再动手
+    r.register(HarnessTool())   // DeepSeek Harness：内置完整 Node 运行时 + dsh，自带 Web 界面
+    // 隔离沙箱（应用私有目录隔离，路径穿越防护）
+    r.register(QuroSandboxTool())
+    // 应用私有数据库只读查询（应用私有目录隔离，只读安全）
+    r.register(QuroPrivateDbTool())
+    // 媒体：百分百开源本地音乐 / 视频播放器（基于 Android 框架 MediaPlayer / 系统播放能力）
+    // 🔴 合体（2026-11-06）：music_play 显式兼容单曲参数，local_music_player 退役
+
+    r.register(MusicPlayTool())
+    r.register(LocalVideoPlayerTool())
+    // AI 自动化浏览器 + 联网搜索（后台可用）
+    r.register(AiBrowserTool())
+    // AI 操控内置浏览器（接管前台 WebView）：snapshot/click/fill/eval/wait/read
+    r.register(BrowserActTool())
+    // AI 在 proot 容器内执行 Python 代码
+    r.register(PythonRunTool())
+    // AI 抓包：在 proot 容器内启动 mitmdump，flow 写到 /mnt/quro/mitm/
+    r.register(PacketCaptureTool())
+    // AI 驱动网页爬虫：用内置浏览器 WebView 批量渲染抓取（支持 JS 动态页、同域限流、去重、导出 Markdown）
+    r.register(WebCrawlerTool())
+    // 终端监控：proot 内读 /proc 暴露负载/内存/进程（无 root 的 Android 应用也可观测，无需 cgroups）
+    r.register(TermMonitorTool())
+    // 升级版知识库（add / search / list，后台可用）
+    r.register(KnowledgeManageTool())
+    // 知识库 C3 重做：本地自包含向量语义检索（RAG），零重依赖，离线可用（无 API Key 时降级本地词法检索）
+    r.register(QuroRagKnowledgeTool())
+    // aiWPS 文档生成（docx / xlsx / pptx / pdf / md / txt / csv / html，后台生成真实可打开文件）
+    r.register(AiwpsCreateTool())
+    // aiWPS 文档读取 / 改写：补全「读-写-改」闭环，让 AI 能真正重写已有文档（解决"重写功能几乎没有"）
+    r.register(AiwpsReadTool())
+    r.register(AiwpsEditTool())
+    // AI 多媒体生成/识别工具：LLM 直接调用，结果返回对话框
+    r.register(ImageGenTool())           // AI 生图
+    r.register(VideoGenTool())           // AI 生视频
+    r.register(TranslateTool())          // 对话框多语言后端：文本翻译（消费 QuroFeatureModelConfig.TRANSLATION）
+    r.register(ImageRecognitionTool())   // AI 图像识别
+    r.register(AudioRecognitionTool())   // AI 音频识别
+    r.register(VideoUnderstandingTool()) // AI 视频理解
+    // CodeCanvas 出图后端（外部 FastAPI 服务，脚本/代码卡/HTML 三条出图通道 + 需求转代码 + 探活）。
+    // 与 ImageGenTool 的分工：image_gen 走厂商生图 API；codecanvas_* 走**确定性渲染**，
+    // 同样的输入永远出同样的图，适合海报/报表/代码卡这类要精确排版的内容。
+    r.register(CodeCanvasProbeTool())     // 先探活与配地址，避免出图失败时盲目重试
+    r.register(CodeCanvasScriptTool())    // 脚本驱动出图（4 引擎 × 4 后端）
+    r.register(CodeCanvasCodeCardTool())  // 代码高亮卡片
+    r.register(CodeCanvasMarkupTool())    // HTML → 图片
+    r.register(CodeCanvasLlmCodeTool())    // 需求 → LLM 写代码（唯一不返图的端点）
+    // CodeCanvas **端侧**出图（SDK 直接跑在 App 里，纯离线，无需起任何服务）。
+    // 与上面五个服务端工具并存：服务端 chromium 后端排版更精细但要用户另装 Python 环境，
+    // 端侧覆盖绝大多数场景且开箱即用。名字带 onscreen 以免与codecanvas_* 撞名
+    // （同名工具会让模型随机挑一个，行为不可预测）。
+    r.register(CodeCanvasOnscreenScriptTool())   // 端侧脚本出图（javascript / kotlin-dsl）
+    r.register(CodeCanvasOnscreenCodeCardTool()) // 端侧代码高亮卡
+    r.register(CodeCanvasOnscreenMarkupTool())   // 端侧 HTML → 图片（需 WebView 后端）
+    // 增强版文档创建工具：支持更多类型和更好渲染
+    r.register(EnhancedDocTool())        // 增强版文档创建
+    // 后台 AIP 排版合成工具：整篇长文档/PPT/报告以「工具调用形式」产出，对话框据此渲染（B 通道 Canvas 引擎）
+    r.register(AipComposeTool())         // 后台 AIP 排版合成（doc/deck/mindmap）
+    // UI 动作工具：打开界面 / 弹层 / 开关（ui_open_* / ui_toggle_* / ui_clear_chat 等）
+    // ⚠️ 此前此行被误注释，导致 ui_open_* 既没进可执行 map、又因 coreSpecs 从 map 过滤而未下发 → 整个 UI 动作体系对 AI 失效。
+    // 恢复注册后，ui_open_build 等全部 ui_open_*/ui_toggle_* 既下发给 LLM、又能被 engine 真正执行。
+    allUiActionTools.forEach { r.register(it) }
+    // 对话框富组件工具（ui_card）：预制组件名册（独立分类；🔴 可视化小卡片是 WIDGET_CARD 分类、走 visual_card 工具，与本工具互不相关）
+    // 🔴 合体（2026-11-06）：ui_card 与 ui_widget 的 run() 逐行相同（仅多一步 kind→type 改写），退役，kind 字段由 ui_widget 兼容
+    // 对话框富组件工具（ui_widget）：预制组件名册（与 ui_control / quro-ui / visual_popup / visual_card 互不相关）
+    r.register(UiWidgetTool())
+    // 可视化组件目录查询（card_catalog）：全量组件的常驻清单在两个下发工具的描述里，
+    // 完整样例按需来此拉 —— 避免把十几 KB 样例常驻进系统提示词。
+    r.register(CardCatalogTool())
+    // 万物可RAG 的模型侧入口（跨域：工具 / 系统提示词规则 / 动态UI组件 / 界面交付路径）。
+    // 与 tool_router 并存：那个只管工具域，这个管「我该走哪条路」这类跨域问题。
+    r.register(RagSearchTool())
+    // 卡片增量补丁（card_patch）：改已下发卡片的某几个字段，不必重发整张卡。
+    // 与卡片栏那条老路（ui_control action:"update"，只覆盖少数字段）并存 ——
+    // 本工具走 JSON Pointer 补丁，对全部组件一视同仁且新增组件无需登记。
+    r.register(CardPatchTool())
+    // MCP 客户端工具：让 AI 调用外部 MCP 服务器暴露的工具（#402）
+    r.register(McpServersTool())
+    r.register(McpListToolsTool())
+    r.register(McpCallTool())
+    r.register(McpCapabilitiesTool())
+    // MCP-ACI 桥接工具：让 AI 通过 ACI 调用外部 MCP 服务器的工具
+    r.register(McpAciListTool())
+    r.register(McpAciCallTool())
+    r.register(McpAciBridgeTool())
+    // 工具发现工具：让 AI 主动查询工具能力目录，解决不会主动使用工具的问题
+    r.register(ToolDiscoveryTool())
+    // KaleidoBox 工具包运行器：让 AI 以进程内 JVM / Dex 引擎运行 Kotlin/Java 工具包（list/install/invoke）
+    r.register(QuroKaleidoBoxTool())
+    // 本地 MCP 部署工具：AI 创作并部署 MCP 服务器到本应用内（#Task8）
+    r.register(McpDeployTool())
+    r.register(McpUndeployTool())
+    r.register(McpListLocalTool())
+    // 广义 IDE 集成工具：图形/视频/音频/3D/游戏/低代码/代码 IDE 的完整知识库和调用能力
+    r.register(CreativeStudioTool())
+    // 可视化问答和操作弹窗工具
+    // 🔴 合体（2026-11-06）：visual_popup 按参数自动分派 提问/确认/富弹窗 三形态，吸收 visual_question/visual_action
+    // 🔴 2026-11-07 修复重复注册：上方「16 族合体批」已注册 VisualPopupMergedTool，
+    //    此处重复 register 会静默覆盖同一个 name，属重构残留，删除。
+    r.register(VisualCardTool())       // 🔴 可视化小卡片（独立分类唯一出口：AI 自由写 HTML 卡体，Widget Lab 卡壳内联渲染）
+    r.register(VisualCardSkeletonTool()) // 🔴 13 份参考样板检索（visual_card 的 html 本可自由写任意场景，样板仅供没把握时参考）
+    r.register(ZxWebCardTool())        // zxwidget 卡片（动态交互界面，477 个 zx 组件）
+    r.register(ZxCatalogTool())        // zx 组件名册与字段契约（做卡片前先查）
+    r.register(VisualCustomPopupTool()) // AI自写UI可视化弹窗（完全自定义HTML）
+    r.register(NodeEditorTool())       // 节点编辑器：AI 直接读写节点流工程（无需打开界面）
+    r.register(VisualStudioTool())     // 可视化编程：命名工程多项目保存（产物+可视化）
+    // 工作流引擎 AI 侧调用入口：创建/点燃/查询（与节点编辑器、本地运行按钮共用同一引擎）
+    r.register(QuroWorkflowCreateTool())
+    r.register(QuroWorkflowTriggerTool())
+    r.register(QuroWorkflowRunStatusTool())
+    // 动态 UI（必备输出）工具：AI 默认主动输出 quro-ui DSL 代码块 → 解析 → Compose 原生渲染（可交互、可回传表单值）
+    r.register(UiDslSpecTool())     // 拉取 DSL 规范，避免长 schema 常驻系统提示词
+    r.register(UiValidateTool())    // 输出前自检，把「渲染失败」变成事前修正
+    r.register(GameUiTool())        // AI 现场写规则、和玩家互动的小游戏（game_board 组件 + callback 回传）
+    // UI 导航工具集：让 AI 能操控自己的界面（ui_* 命名规范）
+    registerUiTools(r)
+    // 流体云工具：控制OPPO流体云，显示状态栏胶囊和卡片
+    //
+    // 🔴 这里原来写的是 `FluidCloudTool(context!!)` —— 全文件唯一一处 context 强解包
+    // （紧随其后的多批工具、以及下面的 attach/mergeSkills 全部用 `context?.let {}` 安全包裹）。
+    // 后果：`buildQuroRegistry(null)` 直接 NPE，而单测 / 工具清单体检 / 任何无 Context 的
+    // 装配路径都会踩到 —— QuroToolRegistryTest 的 6 个基线失败全部源于此，
+    // 也让「实测工具体积」这类无 Android 依赖的回归测试根本写不出来。
+    // 改成与其余工具一致的 `?.let`：无 Context 时跳过该工具（而不是整份注册表崩掉）。
+    context?.let { r.register(FluidCloudTool(it)) }
+    // 助手能力表工具：让 AI 能 list/run 与「能力广场」同一张表里的内置能力
+    // （查手机 / 终端环境检查 / 设备信息 / 驾驶模式 / 跨设备 Agent / 诊断…）。
+    // 与外部指令面、用户点按面共用一份事实，避免出现"用户能点但 AI 不知道"的能力。
+    context?.let { r.register(AssistantSkillTool(it)) }
+    // 对话框文档工具：AI在对话框内直接写文档并渲染显示
+    r.register(ChatDocTool())          // 对话框文档（Markdown/HTML/代码/文本）
+    // 并入「导入工具」（AI 自写 / 用户粘贴 JSON 导入），使其可被 AI 调用
+    context?.let { r.attach(it) }
+    // 并入「可调用技能」：把用户技能注册为 AI 工具函数（function calling），与导入工具同理
+    context?.let { r.mergeSkills(it) }
+    // 同步技能可调用开关（来自模型配置）：使 QuroModelConfig.skillToolsEnabled 生效
+    context?.let { ctx ->
+        runCatching {
+            val cfg = QuroModelConfigRepository(ctx).load()
+            r.skillToolsEnabled = cfg.skillToolsEnabled
+            r.maxSkillTools = cfg.maxSkillTools
+        }
+    }
+    // 高级能力工具集。
+    // 这一批此前只是「独立组件」：有完整业务逻辑，但既没实现 QuroTool 契约也没注册，
+    // 因此从未进入过模型的工具集——功能写了等于没写。现已补齐契约并在此注册。
+    context?.let { ctx ->
+        r.register(QuroMultiProviderTool(ctx))   // multi_provider  ：多提供商配置 / 故障转移 / 健康检查
+        r.register(QuroHeartbeatTool(ctx))       // heartbeat       ：自主心跳与系统自检报告
+        r.register(QuroLocalModelTool(ctx))      // local_model     ：本地模型下载 / 加载 / 推理
+        // virtual_display 已去注册：它创建的 VirtualDisplay 没有挂载 Surface（surface=null），
+        // takeScreenshot() 实际返回 null，是与 bg_screen（真正可用的后台虚拟屏）重复的坏桩。
+        // 统一以 bg_screen 作为虚拟屏入口，避免 AI 在「两个虚拟屏工具」间混淆。源码保留可随时恢复。
+        r.register(QuroTaskSchedulerTool(ctx))   // task_scheduler  ：定时任务调度（Cron）
+        r.register(QuroDataManagerTool(ctx))     // data_manager    ：数据导出 / 导入 / 加密备份
+    }
+    // APK 级插件框架：插件管理工具（plugin_list / plugin_info / plugin_install / plugin_uninstall / plugin_reload）。
+    // 注册进运行时注册表后，它们既下发给 LLM 又能被 engine 真正执行；
+    // 插件自己贡献的 AI 工具不进 map（其执行体是 suspend，由 QuroToolEngine 单独分支处理），
+    // 只通过 coreSpecs() 里的 pluginHostToolSpecs() 下发给 LLM。
+    allPluginManagementTools.forEach { r.register(it) }
+    // 新集群（tool-first 重写）：一组 cluster_* 工具。
+    //   🔴 必须在 ToolCapabilityDirectory.install(...) **之前**注册 —— 目录与 RAG 索引都以
+    //   install 那一刻的 fullSpecs() 为快照；晚注册的工具不会进目录，match_intent 意图检索
+    //   就永远召不回 cluster_start（表现为「明明有集群功能，助手却说不会」）。
+    com.ai.assistance.quro.core.cluster.ClusterToolSet.registerAll(r)
+    // 合体收口：把「本来是一个动作、却注册成多个工具」的入口统一成单工具 + action。
+    // 必须在生成能力目录之前 —— 目录与 RAG 索引取的是此刻的 fullSpecs 快照，
+    // 晚一步就会继续把已退役的散装名字写进检索索引。
+    r.applyUnifiedTools()
+    // 工具能力目录以真实注册表为单一真相源动态生成（修复「分组目录残缺→AI 查不到/不主动用工具」）
+    // 用 fullSpecs()（内置全部 + 技能工具），与模型实际下发集合严格一致（core/full 模式下目录==可调用全集）
+    ToolCapabilityDirectory.install(r.fullSpecs())
+    return r
+}

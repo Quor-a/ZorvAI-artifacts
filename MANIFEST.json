@@ -1,0 +1,37 @@
+{
+  "source_repo": "D:/Calw OS-project/QuroAI-main-rc5",
+  "apk": "ZorvAI-v1.2.7-DSH-rc5-B20261121-0112.apk",
+  "versionName": "1.2.7",
+  "versionCode": "1002007",
+  "build_stamp": "B20261121-0112",
+  "split_artifacts": [
+    {
+      "original_path": "dshmobile/app/src/main/assets/snapshot.tar.xz",
+      "bytes": 175371532,
+      "parts": 2,
+      "chunk_bytes": 94371840,
+      "sha256": "48b76347c6b9630e0dcd5018bd81b8131cbdda766b52ae7adeafe4963b7628c7"
+    },
+    {
+      "original_path": "terminal-core/src/main/assets/dsh-runtime.pack",
+      "bytes": 221133452,
+      "parts": 3,
+      "chunk_bytes": 94371840,
+      "sha256": "a02e537cf3745b3bfff2a2b568e22fcac4f4f4576919cf7c930f7d86971e1064"
+    },
+    {
+      "original_path": "terminal-core/src/main/assets/ubuntu-noble-aarch64-pd-v4.18.0.tar.xz",
+      "bytes": 64133552,
+      "parts": 1,
+      "chunk_bytes": 94371840,
+      "sha256": "91acaa786b8e2fbba56a9fd0f8a1188cee482b5c7baeed707b29ddaa9a294daa"
+    },
+    {
+      "original_path": "ZorvAI-v1.2.7-DSH-rc5-B20261121-0112.apk",
+      "bytes": 958837789,
+      "parts": 11,
+      "chunk_bytes": 94371840,
+      "sha256": "1ad8e01aa760116e47514fbeb3c3298fee0a141acba722ef8179964b0be41a93"
+    }
+  ]
+}

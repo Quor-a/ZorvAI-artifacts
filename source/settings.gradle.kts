@@ -1,0 +1,58 @@
+pluginManagement {
+    repositories {
+        // 阿里云镜像优先：本机直连 Maven Central / Google 不通，先走镜像避免超时重试导致的解析失败
+        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        google()
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        // 阿里云镜像优先：本机直连 Maven Central / Google 不通，先走镜像避免超时
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+        google()
+        mavenCentral()
+        maven { url = uri("https://jitpack.io") }
+        // GeckoView（Mozilla 开源浏览器引擎）官方仓库
+        maven { url = uri("https://maven.mozilla.org/maven2/") }
+    }
+}
+
+rootProject.name = "Quro AI"
+include(":app", ":aidl-aci-browser", ":aidl-aci-core", ":mnn", ":llama", ":lib_aci", ":cap_main", ":aci-app", ":terminal-core", ":genuiagent-sdk", ":miniapp-sdk", ":kaleidobox", ":plugin-contract", ":plugin-engine", ":plugin-express", ":plugin-devkit", ":plugin-units", ":plugin-todo", ":plugin-sysinfo", ":plugin-zorvweb", ":plugin-signcheck", ":plugin-zxwidget",
+    // 多角色集群编排（移植自 AI集群SDK，已去品牌化为 com.ai.assistance.quro.cluster.*）
+    // 依赖方向：cluster-ui → cluster-engine → cluster-bridge → cluster-model
+    ":cluster-model", ":cluster-bridge", ":cluster-engine", ":cluster-storage", ":cluster-ui", ":cluster-fake",
+    // CodeCanvas 出图 SDK（脚本驱动多引擎多后端，纯端侧渲染，不依赖任何服务器）
+    // 依赖方向：app → renderer-compose / renderer-canvas / renderer-svg / engine-kotlindsl / llm-connector → codecanvas-core
+    ":codecanvas-core", ":engine-kotlindsl", ":renderer-canvas", ":renderer-compose", ":renderer-svg", ":llm-connector",
+    // dsh-mobile-apk 完整内置（kelai141/dsh-mobile-apk，已去品牌化为 com.ai.assistance.quro.dshmobile）：
+    // library 模块，壳 UI/服务/引擎管理全部进 ZorvAI；入口由工具箱显式拉起，不抢 LAUNCHER。
+    ":dshmobile:app",
+    // vtlib — 完整 VT 终端模拟器/视图（移植自 Termux terminal-emulator + terminal-view，Apache-2.0）
+    // 已去品牌化：com.termux.terminal / com.termux.view → com.ai.assistance.quro.vt
+    // 提供双缓冲/备用屏幕/滚动/sixel/24 位真彩/鼠标协议/括号粘贴/OSC52/文本选择等能力
+    ":vtlib",
+    // termux-host — Termux app 宿主层完整移植（TermuxActivity/Service/会话管理/设置/通知/快捷键/工具栏）
+    // 去品牌化为 com.ai.assistance.quro.termux；依赖 :vtlib 终端核心 + :terminal-core proot 启动
+    ":termux-host",
+    // mika-core — Mika 内核（原 core 模块，纯 Kotlin JVM，338 文件 / 8.2 万行）完整 vendor。
+    // 后台虚拟屏（cap/phone/a11y）的依赖闭包包级稳定点覆盖 core 的 624/627 文件，
+    // 无法按子集切分，故整模块搬入；只做包名替换，见 docs/tools/vendor_mika_core.py
+    ":mika-core",
+    // mika-phone — Mika 后台虚拟屏操作层（cap/phone/a11y + display，24 文件）完整移植，
+    // 依赖 :mika-core；与上游唯一差别是宿主绑定换成 MikaShellPort（见该模块 kdoc）
+    ":mika-phone")
+project(":mnn").projectDir = file("llm/mnn")
+project(":llama").projectDir = file("llm/llama")
+// CodeCanvas 子模块实际位于 codecanvas/<模块名>/，模块名与目录名不同名，必须显式指路
+for (cc in listOf("codecanvas-core", "engine-kotlindsl",
+    "renderer-canvas", "renderer-compose", "renderer-svg", "llm-connector")) {
+    project(":$cc").projectDir = file("codecanvas/$cc")
+}

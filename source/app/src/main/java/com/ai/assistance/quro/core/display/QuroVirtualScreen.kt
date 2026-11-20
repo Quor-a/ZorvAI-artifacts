@@ -1,0 +1,846 @@
+package com.ai.assistance.quro.core.display
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.util.Log
+import android.view.KeyEvent
+import android.os.Bundle
+import android.os.SystemClock
+import com.ai.assistance.quro.core.ScreenOcrBridge
+import com.ai.assistance.quro.core.adb.QuroAdbWireless
+import com.ai.assistance.quro.core.shizuku.QuroShizuku
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+/**
+ * 后台虚拟屏的统一入口（App 侧）。
+ *
+ * 这块屏对用户**不可见**：AI 在里面启动 App、点按、滑动、读界面，用户照常用自己的手机，
+ * 主屏焦点与输入法都不受影响（Android 14+ 用 OWN_FOCUS + STEAL_TOP_FOCUS_DISABLED 实现）。
+ *
+ * 通道：Shizuku AIDL UserService（shell 身份）→ 特权进程里 `createVirtualDisplay`，
+ * 画面经 Surface 回到本进程 ImageReader，因此截图**不依赖无障碍**。
+ *
+ * 尺寸取主屏分辨率与 dpi，这样 App 在后台屏上的布局与真机一致，坐标可以直接换算。
+ *
+ * UI 侧通过 [state] / [frames] 观察它（管理页与画中画小窗都靠这两个流）。
+ */
+object QuroVirtualScreen {
+
+    private const val TAG = "QuroVirtualScreen"
+
+    /** 管理界面需要的屏状态快照。 */
+    data class UiState(
+        val ready: Boolean = false,
+        val displayId: Int = -1,
+        /** 当前最上层 Activity 的完整类名（判断 AI 走到哪一步了）。 */
+        val topActivity: String? = null,
+        /** 最近一次失败原因（Shizuku 未授权等），非空时界面要显示出来。 */
+        val error: String? = null,
+        /** 用户是否手动收起过管理窗（会话内有效）。 */
+        val dismissed: Boolean = false,
+    )
+
+    private val lock = Any()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    @Volatile
+    private var display: QuroAgentDisplay? = null
+
+    private var frameJob: Job? = null
+
+    /**
+     * 屏的保活器：见 [DisplayAwake]。
+     *
+     * 没有它，这块自带显示组的屏会自己息屏，于是「截图不变 / 点按无效 / 启动变慢」三个症状
+     * 同时出现，而且从 App 侧完全看不出原因（没有异常、没有错误码，帧就是不来）。
+     */
+    private val awake = DisplayAwake(scope) { displayId ->
+        QuroShizuku.acquireShellService()?.pokeUserActivity(displayId) == true
+    }
+
+    private val _frames = MutableStateFlow<Bitmap?>(null)
+
+    /** 后台屏的实时画面（缩略到宽 ≤360，供管理页/画中画显示）。 */
+    val frames: StateFlow<Bitmap?> = _frames.asStateFlow()
+
+    /**
+     * 虚拟屏的像素宽高（用于把浮窗内的触摸坐标换算成屏内坐标）。
+     *
+     * 优先用当前帧的实际尺寸 —— 那是真实渲染出来的宽高；没有帧时退回屏对象记录的值，
+     * 都没有就返回 0，调用方据此跳过这次点击（而不是按错误比例点到别处）。
+     */
+    fun frameWidth(): Int = _frames.value?.width ?: display?.width ?: 0
+
+    fun frameHeight(): Int = _frames.value?.height ?: display?.height ?: 0
+
+    private val _state = MutableStateFlow(UiState())
+
+    /** 屏状态（是否就绪、屏号、当前 Activity、错误）。 */
+    val state: StateFlow<UiState> = _state.asStateFlow()
+
+    /** 最近一次失败原因，供工具返回给 AI 排查（Shizuku 未授权/未运行等）。 */
+    val lastError: String? get() = _state.value.error
+
+    val isReady: Boolean get() = display != null
+
+    /** 屏是否正在被保活（防息屏）。false 时这块屏可能自己睡过去，截图与点按都会失效。 */
+    val isAwake: Boolean get() = awake.isRunning
+
+    /** 无障碍服务是否在跑（决定能不能给出控件 ref）。 */
+    val isA11yAvailable: Boolean
+        get() = com.ai.assistance.quro.service.QuroAccessibilityService.instance != null
+
+    /** 端侧 OCR 是否已预热（首次调用要加载模型，约 1s）。 */
+    val isOcrReady: Boolean get() = ScreenOcrBridge.isWarm
+
+    val displayId: Int get() = display?.displayId ?: -1
+
+    /**
+     * 取（必要时创建）后台屏。失败返回 null，原因见 [lastError]。
+     *
+     * 创建前提：Shizuku 已安装、已授权、服务运行中，且 AIDL UserService 已绑定。
+     */
+    fun ensureDisplay(context: Context): QuroAgentDisplay? {
+        display?.let { return it }
+        synchronized(lock) {
+            display?.let { return it }
+
+            var shell = QuroShizuku.acquireShellService()
+            if (shell == null) {
+                // 尝试补绑，然后等待 Shizuku AIDL 回调就绪（最多 5s）
+                QuroShizuku.bindAidlService()
+                shell = QuroShizuku.waitForShellService(5000)
+                if (shell == null) {
+                    val msg = "Shizuku 特权服务未就绪（5s 超时）：请确认 Shizuku 已安装、已授权、服务正在运行" +
+                        "（设置 → Shizuku）。"
+                    Log.w(TAG, msg)
+                    _state.value = _state.value.copy(ready = false, error = msg)
+                    return null
+                }
+            }
+
+            val metrics = context.resources.displayMetrics
+            val w = metrics.widthPixels.coerceAtLeast(320)
+            val h = metrics.heightPixels.coerceAtLeast(320)
+            val dpi = metrics.densityDpi.coerceAtLeast(120)
+
+            return try {
+                val d = QuroAgentDisplay(shell, w, h, dpi)
+                display = d
+                Log.i(TAG, "后台虚拟屏已创建 id=${d.displayId} ${w}x$h @${dpi}dpi")
+
+                // 🔴 建完立刻开始保活：这块屏自带显示组，不报活动就会自己睡（见 DisplayAwake）
+                awake.start(d.displayId)
+
+                // 屏在的这段时间里 OCR 一定会被用到，趁现在把两套模型加载掉（约 1s），
+                // 别让「第一次看屏」承担这笔开销
+                scope.launch { runCatching { ScreenOcrBridge.warmUp() } }
+
+                // 把屏的帧流转发到自己的 _frames，UI 只依赖本对象即可
+                frameJob?.cancel()
+                frameJob = scope.launch {
+                    d.frames.collect { bmp -> _frames.value = bmp }
+                }
+
+                _state.value = UiState(ready = true, displayId = d.displayId)
+                refreshTopActivity()
+                // 🔴 屏建好后自动拉起悬浮窗（用户要求：这东西是给 AI 用的，不设人工开关）。
+                // 没有这一步，屏虽然建好了但用户看不见任何东西——「后台虚拟屏没反映」的根因。
+                // start 是幂等的（已在跑时再调只会走 onStartCommand），且此处 display 已赋值，
+                // 悬浮窗 onCreate 里再调 ensureDisplay 会直接拿到现成对象，不会递归建屏。
+                runCatching {
+                    com.ai.assistance.quro.service.QuroBgScreenOverlayService.start(context)
+                }.onFailure { Log.w(TAG, "自动拉起后台屏悬浮窗失败", it) }
+                d
+            } catch (t: Throwable) {
+                val msg = "创建后台虚拟屏失败：${t.message}"
+                Log.e(TAG, "createDisplay failed", t)
+                _state.value = _state.value.copy(ready = false, error = msg)
+                null
+            }
+        }
+    }
+
+    /** 刷新「当前最上层 Activity」（管理界面用；也用于判断 AI 走到哪一步）。 */
+    fun refreshTopActivity() {
+        val d = display ?: return
+        val shell = QuroShizuku.acquireShellService() ?: return
+        val top = runCatching { shell.topActivity(d.displayId) }.getOrNull()
+        _state.value = _state.value.copy(topActivity = top)
+    }
+
+    /** 管理页关闭时调用：只收起界面，不销毁屏（屏还在给 AI 用）。 */
+    fun dismissUi() {
+        _state.value = _state.value.copy(dismissed = true)
+    }
+
+    /** 用户重新打开管理页。 */
+    fun showUi() {
+        _state.value = _state.value.copy(dismissed = false)
+        refreshTopActivity()
+    }
+
+    /** 把 App 启动到后台屏。返回给 AI 看的一句话结果。 */
+    fun openApp(context: Context, packageName: String, userId: Int = -1, cold: Boolean = false): String {
+        if (packageName.isBlank()) return "缺少 packageName"
+        val d = ensureDisplay(context) ?: return lastError ?: "后台虚拟屏不可用"
+        val shell = QuroShizuku.acquireShellService() ?: return "Shizuku 特权服务未就绪"
+        return try {
+            // 🔴 动作前开始盯主屏：不少 App 被 setLaunchDisplayId 拉起后，自己又会从
+            // 通知/服务/系统选择器里二次 launch，系统按默认把它放到**用户主屏**。
+            // 后台屏上看不出任何变化，模型会以为没点到而反复重试 —— 盯住并挪回。
+            val since = SystemClock.uptimeMillis()
+            val topBefore = runCatching { shell.watchMainScreen(MAIN_WATCH_MS) }.getOrDefault(-1)
+
+            // 指定了分身（userId >= 0）就直接走分身通道（应用双开/工作资料/手机分身）
+            val r = if (userId >= 0) {
+                when (val ur = shell.startAppInUser(d.displayId, packageName, userId, cold)) {
+                    8 -> {
+                        val us = runCatching { shell.appCopyUsers() }
+                            .getOrNull()?.getIntArray("users")
+                        return "$packageName 不在用户 $userId 的可用分身列表里。本机分身用户：" +
+                            (if (us == null || us.isEmpty()) "无（未开应用分身 / 工作资料）" else us.joinToString(",")) +
+                            "。要不试试不传 userId，让系统自己找？"
+                    }
+                    else -> ur
+                }
+            } else {
+                if (cold) runCatching { shell.exec("am force-stop $packageName") }
+                shell.startApp(d.displayId, packageName)
+            }
+            val base = when (r) {
+                0 -> {
+                    refreshTopActivity()
+                    "已把 $packageName 启动到后台屏（displayId=${d.displayId}）"
+                }
+                // ── 接管阶梯的结果（QuroShellService.startApp 新增码）──
+                // 用户原话：「AI 根本不会换起打开老是说在主屏」→ 现在不再放弃，而是接手，
+                // 并把「怎么接手的」讲清楚，让 AI 知道当前状态而不是以为自己没成功。
+                10 -> {
+                    refreshTopActivity()
+                    "$packageName 本来就在后台屏，已切到前台（没有重启，界面状态保留）"
+                }
+                11 -> {
+                    refreshTopActivity()
+                    "已把 $packageName 挪到后台屏（任务从别处移过来，界面状态保留）"
+                }
+                12 -> {
+                    refreshTopActivity()
+                    "已在后台屏另开一个 $packageName 实例（你主屏那份没动，两边可同时用）"
+                }
+                13 -> {
+                    refreshTopActivity()
+                    "已接管 $packageName：把主屏那份移到了后台屏（原界面状态保留）"
+                }
+                1 -> "$packageName 正在你主屏前台使用，且系统拒绝另起实例。要么先切走它，要么冷启动（cold=true）—— 不要重复调用本工具。"
+                2 -> {
+                    // 未安装 ≠ 没有：应用双开/手机分身/工作资料里装的那份在别的 userId 下，
+                    // 默认用户当然「没有可启动的入口」。自动查分身并改从分身启动，AI 无需再猜。
+                    val copies = runCatching { shell.appCopyUsers() }.getOrNull()
+                    val users = copies?.getIntArray("users") ?: IntArray(0)
+                    var done: String? = null
+                    for (u in users) {
+                        val pkgs = runCatching { shell.listPackages(u) }.getOrDefault("")
+                        if (pkgs.contains("package:$packageName")) {
+                            val ur = shell.startAppInUser(d.displayId, packageName, u, false)
+                            if (ur == 0) {
+                                refreshTopActivity()
+                                done = "已从用户 $u（分身/工作资料）把 $packageName 启动到后台屏"
+                            } else {
+                                done = "$packageName 装在用户 $u（分身）里，但启动失败（code=$ur）"
+                            }
+                            break
+                        }
+                    }
+                    done ?: ("$packageName 在主用户和全部分身里都没装（已查用户：" +
+                        (if (users.isEmpty()) "无分身" else users.joinToString(",")) + "）")
+                }
+                4 -> "$packageName 正在另一块后台屏上使用中"
+                else -> "启动 $packageName 失败（code=$r）"
+            }
+            if (r !in setOf(0, 10, 11, 12, 13)) return base
+
+            // 动作后核对：这几秒内主屏冒到最上面的是不是它。
+            // 🔴 接管类结果（10/11/13）刚由我们自己挪过屏，watch 窗口里会把它记成「主屏到达」，
+            // 再跑一次救援是白折腾甚至误判，所以只对「全新启动(0)」和「另开实例(12)」做核对。
+            if (r != 0 && r != 12) return base
+
+            val rescued = rescueIfOnMainScreen(shell, d.displayId, since, topBefore, packageName, context)
+            if (rescued != null) "$base\n$rescued" else base
+        } catch (t: Throwable) {
+            Log.e(TAG, "startApp failed", t)
+            "启动 $packageName 失败：${t.message}"
+        }
+    }
+
+    /** 后台屏最新画面（PNG）。 */
+    fun screenshotPng(context: Context): ByteArray? {
+        val d = ensureDisplay(context) ?: return null
+        return runCatching { d.latestFramePng() }.getOrNull()
+    }
+
+    /**
+     * 截后台屏：优先 Shizuku ImageReader（[screenshotPng]），失败退回 shell 的
+     * `screencap -d <displayId>`（Shizuku 特权进程或无线调试 ADB 都行）。
+     * 这样「Shizuku 或无线调试，只要有一种权限就能看后台虚拟屏」—— 任一通道可用即可出图。
+     */
+    fun captureDisplay(context: Context): ByteArray? = screenshotPng(context) ?: screenshotPngViaAdb(context)
+
+    /**
+     * 经 shell 截指定屏：Shizuku 特权进程或无线调试 ADB 都行（二者都是 shell 身份，能
+     * `screencap` 虚拟屏；用户实测无线 ADB `screencap -d 18` 可截到 423KB 图）。
+     *
+     * 先把图写到 `/sdcard` 共享存储、再让本进程读回（App 有 MANAGE_EXTERNAL_STORAGE，可跨进程读）。
+     * 依赖本进程已知的 displayId；若后台屏不是本 App 建的（displayId=-1），返回 null。
+     */
+    fun screenshotPngViaAdb(context: Context): ByteArray? {
+        val id = displayId
+        if (id < 0) return null
+        val path = "/sdcard/quro_vd_capture.png"
+        var ran = false
+        // ① Shizuku 特权进程（与建屏同一个 shell，最稳）
+        runCatching {
+            QuroShizuku.acquireShellService()?.let { shell ->
+                shell.exec("screencap -d $id -p $path")
+                ran = true
+            }
+        }
+        // ② 无线调试 ADB（Shizuku 不可用时兜底）
+        if (!ran) {
+            runCatching {
+                if (QuroAdbWireless.ensureConnected(context)) {
+                    QuroAdbWireless.exec("screencap -d $id -p $path")
+                    ran = true
+                }
+            }
+        }
+        if (!ran) return null
+        val f = java.io.File(path)
+        if (!f.isFile || f.length() == 0L) return null
+        return runCatching { f.readBytes().also { f.delete() } }.getOrNull()
+    }
+
+    /** 后台屏当前最上层 Activity 的完整类名；无任务返回 null。 */
+    fun topActivity(context: Context): String? {
+        val d = ensureDisplay(context) ?: return null
+        val shell = QuroShizuku.acquireShellService() ?: return null
+        return runCatching { shell.topActivity(d.displayId) }.getOrNull()
+            ?.also { _state.value = _state.value.copy(topActivity = it) }
+    }
+
+    /** 在后台屏上点一下。 */
+    fun tap(context: Context, x: Int, y: Int): Boolean {
+        val d = ensureDisplay(context) ?: return false
+        val shell = QuroShizuku.acquireShellService() ?: return false
+        return runCatching { shell.injectTap(d.displayId, x, y) }.getOrDefault(false)
+    }
+
+    /** 在后台屏上按一个键（走白名单）。 */
+    fun key(context: Context, keyCode: Int): Boolean {
+        val d = ensureDisplay(context) ?: return false
+        val shell = QuroShizuku.acquireShellService() ?: return false
+        return runCatching { shell.injectKey(d.displayId, keyCode) }.getOrDefault(false)
+    }
+
+    /** 返回键。 */
+    fun back(context: Context): Boolean = key(context, KeyEvent.KEYCODE_BACK)
+
+    /**
+     * 一次滑动：从 (x1,y1) 到 (x2,y2)，分 [steps] 段，总时长 [durationMs]。
+     * 底层注入真实的时间序列，App 看到的速度就是这里给的速度。
+     */
+    fun swipe(
+        context: Context,
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        durationMs: Long = 300,
+        steps: Int = 12,
+    ): Boolean {
+        val d = ensureDisplay(context) ?: return false
+        val shell = QuroShizuku.acquireShellService() ?: return false
+        val n = steps.coerceIn(2, 200)
+        val dur = durationMs.coerceIn(50L, 8_000L)
+        val xs = IntArray(n) { i -> x1 + (x2 - x1) * i / (n - 1) }
+        val ys = IntArray(n) { i -> y1 + (y2 - y1) * i / (n - 1) }
+        val times = LongArray(n) { i -> dur * i / (n - 1) }
+        return runCatching { shell.injectStroke(d.displayId, xs, ys, times) }.getOrDefault(false)
+    }
+
+    /** 动作后盯主屏的窗口：3 秒。太短会漏掉慢启动的 App，太长会把用户自己的操作算进来。 */
+    private const val MAIN_WATCH_MS = 3000
+
+    /** 动作后等多久再核对（给二次 launch 一点时间）。 */
+    private const val RESCUE_WAIT_MS = 900L
+
+    /**
+     * 核对「刚才那个 App 是不是跑到用户主屏上了」，是就把它挪回后台屏。
+     *
+     * 判定用移植来的 [MainScreenSpill]（纯逻辑）：排除本应用自己、桌面/最近任务类页面、
+     * 从别的屏挪过来的任务、以及用户正在主屏上用着的那个 App（那属于用户意图，不能抢）。
+     *
+     * 🔴 这里曾经**无条件** `sleep(900)`，于是每次 open 都白等将近 1 秒 ——
+     * 用户感知就是「AI 启动 App 特别慢」。绝大多数启动根本不会外溢到主屏，
+     * 所以改成：先看有没有记录，**没有就直接返回**，有才等这一小会儿。
+     *
+     * @return 给 AI 看的一句话；没有需要处理的情况返回 null
+     */
+    private fun rescueIfOnMainScreen(
+        shell: com.ai.assistance.quro.IQuroShellService,
+        displayId: Int,
+        since: Long,
+        topBefore: Int,
+        packageName: String,
+        context: Context,
+    ): String? {
+        return runCatching {
+            // 快速通道：这一刻主屏没有任何新到达的任务 → 什么都不会发生，不必等
+            val first = shell.mainArrivals(since) ?: return null
+            if (parseArrivals(first).isEmpty()) return null
+            Thread.sleep(RESCUE_WAIT_MS)
+            val b = shell.mainArrivals(since) ?: return null
+            val arrivals = parseArrivals(b)
+            if (arrivals.isEmpty()) return null
+            val verdicts = MainScreenSpill.decide(
+                arrivals = arrivals,
+                since = since,
+                windowMs = MAIN_WATCH_MS.toLong(),
+                topBefore = topBefore,
+                excluded = setOf(context.packageName),
+                userTaps = emptyList(),
+            )
+            if (verdicts.isEmpty()) return null
+
+            val moved = mutableListOf<String>()
+            val inUse = mutableListOf<String>()
+            val failed = mutableListOf<String>()
+            for (v in verdicts) {
+                when (v) {
+                    is MainScreenSpill.PullBack -> {
+                        val pkg = v.arrival.packageName ?: continue
+                        if (shell.moveTask(v.arrival.taskId, displayId)) {
+                            moved += pkg
+                        } else {
+                            failed += pkg
+                        }
+                    }
+                    is MainScreenSpill.InUse -> {
+                        inUse += v.arrival.packageName ?: packageName
+                    }
+                }
+            }
+            when {
+                moved.isNotEmpty() ->
+                    "⚠️ ${moved.joinToString()} 被系统放到了你的主屏上，已自动挪回后台屏"
+                inUse.isNotEmpty() ->
+                    "${inUse.joinToString()} 开在你正在用的界面里，没有动它（要后台操作请先切走）"
+                failed.isNotEmpty() ->
+                    "${failed.joinToString()} 跑到了主屏且挪回失败（可能被系统锁定了任务）"
+                else -> null
+            }
+        }.getOrNull()
+    }
+
+    /** 把 AIDL 回来的平行数组还原成 [MainScreenSpill.Arrival] 列表。 */
+    private fun parseArrivals(b: Bundle): List<MainScreenSpill.Arrival> {
+        val tasks = b.getIntArray(MainScreenWatch.KEY_TASK) ?: return emptyList()
+        val pkgs = b.getStringArray(MainScreenWatch.KEY_PACKAGE)
+        val users = b.getIntArray(MainScreenWatch.KEY_USER)
+        val ats = b.getLongArray(MainScreenWatch.KEY_AT)
+        val froms = b.getIntArray(MainScreenWatch.KEY_FROM)
+        val same = b.getBooleanArray(MainScreenWatch.KEY_SAME_TASK)
+        val standard = b.getBooleanArray(MainScreenWatch.KEY_STANDARD)
+        val acts = b.getStringArray(MainScreenWatch.KEY_ACTIVITY)
+        val nows = b.getIntArray(MainScreenWatch.KEY_NOW)
+        return tasks.indices.map { i ->
+            MainScreenSpill.Arrival(
+                taskId = tasks[i],
+                packageName = pkgs?.getOrNull(i),
+                userId = users?.getOrNull(i) ?: -1,
+                at = ats?.getOrNull(i) ?: 0L,
+                from = froms?.getOrNull(i) ?: -1,
+                sameTask = same?.getOrNull(i) ?: false,
+                standard = standard?.getOrNull(i) ?: true,
+                now = nows?.getOrNull(i) ?: -1,
+                topActivity = acts?.getOrNull(i),
+            )
+        }
+    }
+
+    /**
+     * 在后台屏的输入框里写入文字（**不经过系统输入法**）。
+     *
+     * 为什么要单独一条：走 IME 会在用户主屏弹出键盘（输入法窗口跟焦点走），
+     * 是后台操作里最容易被察觉的打扰。走无障碍 ACTION_SET_TEXT 等价粘贴，零打扰。
+     *
+     * @return 实际写入的字符数；null = 这块屏上没有可用输入框（调用方应提示先点一下输入框）
+     */
+    fun inputText(context: Context, text: String, hint: String? = null, append: Boolean = false): Int? {
+        val d = display ?: return null
+        val svc = com.ai.assistance.quro.service.QuroAccessibilityService.instance ?: return null
+        val ok = runCatching {
+            BgScreenReader.inputText(svc, d.displayId, text, hint, append)
+        }.getOrDefault(false)
+        if (ok) return text.length
+        // 没有可编辑控件，或该控件不认 ACTION_SET_TEXT
+        return null
+    }
+
+    /**
+     * 列出设备上的应用分身（应用双开 / 手机分身 / 工作资料）。
+     *
+     * ## 为什么必须给 AI 这条
+     *
+     * 「双开 / 多开 AI 不会开 app」的根因：默认用户里查不到启动入口 ≠ 没装 ——
+     * 双开的那份在另一个 userId 下。AI 必须先能**列出**分身，才能指定 userId 启动；
+     * 否则它只会反复说「未安装」。
+     *
+     * @return 人读文本；没有分身时也返回明确说明
+     */
+    /**
+     * 列应用分身 / 工作资料用户空间。
+     *
+     * [target] 非空时额外回答「这个 App 装在哪几份用户里、哪块后台屏正开着它」——
+     * 用户说「用分身的微信」时，AI 靠这个拿到确切 userId，不用瞎猜。
+     */
+    fun listAppCopies(context: Context, target: String = ""): String {
+        val shell = QuroShizuku.acquireShellService() ?: return "Shizuku 特权服务未就绪"
+        return runCatching {
+            val b = shell.appCopyUsers()
+            val users = b.getIntArray("users") ?: IntArray(0)
+            val selfUser = android.os.Process.myUid() / 100000
+
+            // 指定了包名：直接回答「装在哪、现在开在哪」，比让模型逐个试快得多
+            if (target.isNotBlank()) {
+                val sb = StringBuilder()
+                sb.appendLine("「$target」的安装分布：")
+                var any = false
+                fun probe(u: Int, label: String) {
+                    val pkgs = runCatching { shell.listPackages(u) }.getOrDefault("")
+                    if (pkgs.contains("package:$target")) {
+                        any = true
+                        sb.appendLine("  - $label（userId=$u）：已安装")
+                    }
+                }
+                probe(selfUser, "主用户")
+                users.forEach { probe(it, "分身/工作资料") }
+                if (!any) sb.appendLine("  - 主用户与所有分身里都没装")
+                val dOn = runCatching { shell.displayOfPackage(target) }.getOrDefault(-1)
+                if (dOn >= 0) sb.appendLine("当前在后台屏 displayId=$dOn 上开着。")
+                if (users.isEmpty()) {
+                    sb.appendLine("本机没有应用分身（应用双开 / 手机分身 / 工作资料均未开启）。")
+                }
+                sb.append("直接 open(packageName=\"$target\") 即可，它会自动从装着的那一份启动；")
+                sb.append("要指定某一份就在 open 里传 userId。")
+                return sb.toString().trim()
+            }
+
+            if (users.isEmpty()) {
+                "本机没有应用分身（应用双开 / 手机分身 / 工作资料均未开启）。"
+            } else {
+                val lines = users.map { u ->
+                    val n = runCatching {
+                        shell.listPackages(u).split("\n").count { it.startsWith("package:") }
+                    }.getOrDefault(-1)
+                    "  - 用户 $u：$n 个应用"
+                }
+                "本机有 ${users.size} 份用户空间：\n" + lines.joinToString("\n") +
+                    "\n启动分身里的 App：open 时传 userId（上面列出的编号）；不传也行，会自动去找。" +
+                    "\n想知道某个 App 装在哪几份里 → app_users 带上 packageName。"
+            }
+        }.getOrElse { "查询分身失败：${it.message}" }
+    }
+
+    // ─────────── 界面结构读取（移植 Mika 的读树能力）───────────
+
+    /** 最近一次读到的界面快照；`tapElement` 靠它把 ref 换成坐标。 */
+    @Volatile
+    private var lastSnapshot: BgSnapshot? = null
+
+    /** 最近一次完整读屏（结构 + OCR + 诊断），供 UI 显示。 */
+    @Volatile
+    private var lastReading: BgReading? = null
+
+    /**
+     * 读一次屏的完整结果：**无障碍控件树 + 端侧 OCR + 画面诊断**。
+     *
+     * 为什么要把三样合在一起交给模型：以前只给控件树，于是「自绘界面 / 无障碍没开 /
+     * 界面禁止截屏 / 还在加载」这四种情况在模型眼里长得一模一样——都是「没有元素」。
+     * 模型只能瞎猜，表现出来就是「AI 看屏有问题」。
+     */
+    data class BgReading(
+        val displayId: Int,
+        val width: Int,
+        val height: Int,
+        val topPackage: String?,
+        /** 无障碍控件树；无障碍服务没开时为 null（不是「界面为空」）。 */
+        val snapshot: BgSnapshot?,
+        /** OCR 结果；没跑 OCR 时为 null（结构已经够用）。 */
+        val ocr: ScreenOcrBridge.Result?,
+        /** 画面采样；没拿到帧时为 null。 */
+        val probe: FrameGate.Probe?,
+        /** 画面是否已停稳（false = 预算内一直在变，通常还在加载）。 */
+        val stable: Boolean,
+        /** 后台屏是否就绪。 */
+        val screenReady: Boolean,
+        /** 屏不可用的原因。 */
+        val error: String? = null,
+    ) {
+        /** 结构信息和 OCR 都很空 —— 模型最容易被这种情况骗。 */
+        private val emptyish: Boolean
+            get() = (snapshot?.elements?.isEmpty() ?: true) && (ocr?.lines?.isEmpty() ?: true)
+
+        /** 压成给模型看的文本。**有诊断结论，不让模型自己猜。** */
+        fun toPromptText(): String {
+            val sb = StringBuilder()
+            sb.appendLine("后台屏 displayId=$displayId ${width}x$height")
+            topPackage?.let { sb.appendLine("前台包：$it") }
+
+            val snap = snapshot
+            if (snap == null) {
+                sb.appendLine("无障碍：❌ 未开启 → 没有控件 ref，只能按坐标点。ocr 文字可直接 tap。")
+            } else {
+                val els = snap.elements
+                if (els.isEmpty()) {
+                    sb.appendLine("无障碍：✅ 已开启，但这块屏上没有可读控件（自绘界面/游戏/界面还没画出来）。")
+                } else {
+                    sb.appendLine("无障碍：✅ 可操作元素 ${els.size} 个（ref 可直接用于 tap_element）：")
+                    els.take(ELEMENT_LIMIT).forEach { e ->
+                        val flags = buildList {
+                            if (e.clickable) add("可点")
+                            if (e.editable) add("可输入")
+                            if (e.scrollable) add("可滚")
+                            if (e.checked) add("已选")
+                            if (!e.enabled) add("禁用")
+                            if (e.password) add("密码")
+                            if (e.focused) add("已聚焦")
+                        }.joinToString(",")
+                        val label = e.name.ifBlank { "(无文字)" }.take(48)
+                        // 资源 ID 与占位语对「认出哪个是搜索框」很关键，但只在有信息量时才打印
+                        val id = e.resourceId?.let { " #$it" } ?: ""
+                        val ph = e.placeholder?.takeIf { it.isNotBlank() && it != e.name }
+                            ?.let { " 占位\"${it.take(24)}\"" } ?: ""
+                        sb.appendLine("  ${e.ref} ${e.role} \"$label\" (${e.centerX},${e.centerY})$id$ph${if (flags.isEmpty()) "" else " [$flags]"}")
+                    }
+                    if (els.size > ELEMENT_LIMIT) sb.appendLine("  …还有 ${els.size - ELEMENT_LIMIT} 个未列出")
+                    val texts = snap.texts
+                    if (texts.isNotEmpty()) {
+                        sb.appendLine("界面文字：" + texts.take(TEXT_LIMIT).joinToString(" | ").take(1200))
+                    }
+                }
+            }
+
+            val o = ocr
+            if (o != null) {
+                when (o.status) {
+                    ScreenOcrBridge.Status.OK -> {
+                        sb.appendLine("OCR 补读（本机识别 ${o.lines.size} 行，坐标可直接 tap）：")
+                        o.lines.take(OCR_LIMIT).forEach { l ->
+                            sb.appendLine("  \"${l.text.take(60)}\" (${l.centerX},${l.centerY})")
+                        }
+                        if (o.lines.size > OCR_LIMIT) sb.appendLine("  …还有 ${o.lines.size - OCR_LIMIT} 行")
+                    }
+                    ScreenOcrBridge.Status.EMPTY ->
+                        sb.appendLine("OCR：识别成功但屏上没有文字（纯图标/纯图片界面）。")
+                    ScreenOcrBridge.Status.FAILED ->
+                        sb.appendLine("OCR：❌ 识别器出错（${o.reason}）—— 这不代表屏上没有文字。")
+                    ScreenOcrBridge.Status.UNAVAILABLE ->
+                        sb.appendLine("OCR：不可用（${o.reason}）。")
+                }
+            }
+
+            // ── 诊断结论：把「看起来一样」的几种坏状态区分开 ──
+            val p = probe
+            when {
+                !screenReady -> sb.appendLine("⚠️ 后台屏未就绪：${error ?: "先 open 一个 App 再读"}")
+                p?.black == true ->
+                    sb.appendLine("⚠️ 画面全黑：该界面很可能禁止截屏（FLAG_SECURE），结构也读不到内容。只能盲操作或改用主屏工具。")
+                !stable ->
+                    sb.appendLine("⚠️ 画面一直在变：界面可能还在加载/过渡。等 1 秒再 read 一次通常就正常。")
+                emptyish ->
+                    sb.appendLine("⚠️ 结构与文字都为空：确认 App 真的在这个屏上（open 后先看 top），或改用 screenshot 看画面。")
+            }
+            return sb.toString().trim()
+        }
+
+        private companion object {
+            const val ELEMENT_LIMIT = 60
+            const val TEXT_LIMIT = 40
+            const val OCR_LIMIT = 40
+        }
+    }
+
+    /**
+     * 读一次屏（结构为主，结构稀薄时自动补 OCR）。
+     *
+     * @param withOcr 允许 OCR 兜底。关掉它只读结构（更快，但自绘界面会读空）
+     */
+    suspend fun readForAi(context: Context, withOcr: Boolean = true): BgReading {
+        val d = ensureDisplay(context)
+        if (d == null) {
+            return BgReading(-1, 0, 0, null, null, null, null, true, false, lastError ?: "后台虚拟屏不可用")
+        }
+
+        // ① 控件树：无障碍在跑才有；没开时为 null（不是空界面）
+        val snap = readScreen()
+        lastSnapshot = snap
+
+        // ② 是否需要 OCR：结构读不到、或读到的太少（自绘 UI 的典型形态）
+        val sparse = snap == null || snap.elements.size < 3 || snap.texts.size < 3
+        var ocr: ScreenOcrBridge.Result? = null
+        var probe: FrameGate.Probe? = null
+        var stable = true
+
+        if (withOcr && sparse) {
+            // 等画面停稳再认，否则会认到启动图/白屏/骨架屏（这是「看屏不准」的主因之一）
+            val frame = FrameGate.awaitStable { d.latestFrameBitmap() }
+            if (frame != null) {
+                probe = frame.probe
+                stable = frame.stable
+                if (frame.probe.black) {
+                    // 防截屏/还没亮：别浪费时间 OCR，直接回收
+                    runCatching { frame.bitmap.recycle() }
+                } else {
+                    // 🔴 直接喂位图：以前走「Bitmap → PNG → decode → OCR」，
+                    //    多一次全尺寸编码+解码，白白慢 400~800ms。
+                    ocr = ScreenOcrBridge.read(frame.bitmap)
+                }
+            }
+        } else if (sparse) {
+            // 不跑 OCR，但至少告诉模型画面是不是黑的
+            d.latestFrameBitmap()?.let { bmp ->
+                probe = FrameGate.probe(bmp)
+                bmp.recycle()
+            }
+        }
+
+        return BgReading(
+            displayId = d.displayId,
+            width = d.width,
+            height = d.height,
+            topPackage = snap?.topPackage,
+            snapshot = snap,
+            ocr = ocr,
+            probe = probe,
+            stable = stable,
+            screenReady = true,
+        ).also { lastReading = it }
+    }
+
+    /** 最近一次完整读屏（不重新读）。 */
+    fun lastReading(): BgReading? = lastReading
+
+    /** 当前画面的粗签名（0 = 还没画面）。动作前后各取一次就能判断「界面到底变没变」。 */
+    fun frameSignature(): Long {
+        val d = display ?: return 0L
+        val bmp = d.latestFrameBitmap() ?: return 0L
+        return try {
+            FrameGate.probe(bmp).signature
+        } finally {
+            bmp.recycle()
+        }
+    }
+
+    /**
+     * 等画面变化，最多 [timeoutMs]。
+     *
+     * 用途：点完立刻判断「这一下到底点中没点中」——变了通常 100–300ms 就返回，
+     * 没变才等满。比固定 sleep 快，也比「再 read 一次让模型自己比」准。
+     */
+    suspend fun awaitFrameChange(before: Long, timeoutMs: Long = 1_200L): Boolean =
+        FrameGate.awaitChange(before, timeoutMs) { display?.latestFrameBitmap() }
+
+    /**
+     * 读后台屏的**控件树**（不是截图）。
+     *
+     * 需要无障碍服务在运行；服务没开时返回 null（此时只能退回 screenshot）。
+     * 这一步是「精确点击」的前提：拿到 ref + 真实坐标，就不必靠看图猜位置。
+     */
+    fun readScreen(): BgSnapshot? {
+        val d = display ?: return null
+        val svc = com.ai.assistance.quro.service.QuroAccessibilityService.instance ?: return null
+        val snap = BgScreenReader.read(svc, d.displayId, d.width, d.height) ?: return null
+        lastSnapshot = snap
+        return snap
+    }
+
+    /** 最近一次快照（供 UI 显示，不重新读屏）。 */
+    fun lastSnapshot(): BgSnapshot? = lastSnapshot
+
+    /**
+     * 按 ref（如 `@e3`）点击某个元素。
+     *
+     * ref 来自上一次 [readScreen]；界面已经变了会点错，所以点之前应由调用方重新 read。
+     */
+    fun tapElement(context: Context, ref: String): Boolean {
+        val e = lastSnapshot?.elements?.firstOrNull { it.ref == ref } ?: return false
+        return tapAt(context, e.centerX, e.centerY)
+    }
+
+    /**
+     * 点一下：**优先用无障碍手势**（不需要任何特权），失败再退回 Shizuku 注入。
+     *
+     * 为什么这个顺序：无障碍通道在多数机型上更稳（不受 shell 输入注入限制），
+     * 而 Shizuku 注入需要服务在线；两条都留，任一条可用即可工作。
+     */
+    fun tapAt(context: Context, x: Int, y: Int): Boolean {
+        val d = display ?: return false
+        // 🔴 Shizuku 特权注入**优先**（Extendroid 同款路径：InputManager.injectInputEvent +
+        //    setDisplayId）。之前无障碍手势优先是错的 —— dispatchGesture 的跨屏
+        //    （setDisplayId）在大量 ROM 上被静默忽略，表现就是「点了没反应，
+        //    虚拟屏只是个投屏」。特权注入才是主通道，无障碍只做兜底。
+        runCatching {
+            QuroShizuku.acquireShellService()?.let { shell ->
+                if (shell.injectTap(d.displayId, x, y)) return true
+            }
+        }
+        val svc = com.ai.assistance.quro.service.QuroAccessibilityService.instance
+        if (svc != null && svc.tapOn(d.displayId, x.toFloat(), y.toFloat())) return true
+        return tap(context, x, y)
+    }
+
+    /** 滑动：同样优先无障碍手势，失败退回 Shizuku 注入。 */
+    fun swipeAt(context: Context, x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long = 300): Boolean {
+        val d = display ?: return false
+        // 同 tapAt：特权 injectStroke（逐点带时间戳的真实滑动）优先，无障碍兜底
+        runCatching {
+            QuroShizuku.acquireShellService()?.let { shell ->
+                val n = 16
+                val xs = IntArray(n) { i -> x1 + (x2 - x1) * i / (n - 1) }
+                val ys = IntArray(n) { i -> y1 + (y2 - y1) * i / (n - 1) }
+                val ts = LongArray(n) { i -> durationMs * i / (n - 1) }
+                if (shell.injectStroke(d.displayId, xs, ys, ts)) return true
+            }
+        }
+        val svc = com.ai.assistance.quro.service.QuroAccessibilityService.instance
+        if (svc != null && svc.swipeOn(d.displayId, x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), durationMs)) {
+            return true
+        }
+        return swipe(context, x1, y1, x2, y2, durationMs)
+    }
+
+    /** 释放后台屏（会话结束 / 用户关闭能力时调用）。 */
+    fun release() {
+        synchronized(lock) {
+            val d = display ?: return
+            display = null
+            awake.stop()
+            frameJob?.cancel()
+            frameJob = null
+            runCatching { d.release() }
+            _frames.value = null
+            lastSnapshot = null
+            _state.value = UiState()
+            Log.i(TAG, "后台虚拟屏已释放 id=${d.displayId}")
+        }
+    }
+}
+
